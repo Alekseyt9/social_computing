@@ -46,9 +46,11 @@ func generate_text(system_prompt: String, user_prompt: String) -> bool:
 			{"role": "system", "content": system_prompt},
 			{"role": "user", "content": user_prompt},
 		],
-		"temperature": 0.7,
-		"max_completion_tokens": 256,
+		"temperature": 0.45,
+		"max_completion_tokens": 1024,
 	}
+	if model.begins_with("openai/gpt-oss"):
+		payload["reasoning_effort"] = "low"
 	var headers := PackedStringArray([
 		"Content-Type: application/json",
 		"Authorization: Bearer %s" % api_key,
@@ -104,6 +106,17 @@ static func parse_completion_response(response_code: int, body: PackedByteArray)
 	var first_choice: Variant = choices[0]
 	if typeof(first_choice) != TYPE_DICTIONARY:
 		return {"ok": false, "error": "Некорректный формат ответа Groq"}
+	var finish_reason := str(first_choice.get("finish_reason", "stop"))
+	if finish_reason == "length":
+		return {
+			"ok": false,
+			"error": "Groq обрезал реплику по лимиту токенов",
+		}
+	if finish_reason not in ["", "stop"]:
+		return {
+			"ok": false,
+			"error": "Groq не завершил текстовую реплику: %s" % finish_reason,
+		}
 	var message: Variant = first_choice.get("message", {})
 	if typeof(message) != TYPE_DICTIONARY:
 		return {"ok": false, "error": "В ответе Groq нет сообщения"}

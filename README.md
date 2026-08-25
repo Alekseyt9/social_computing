@@ -56,6 +56,8 @@ Implemented so far:
 - a deterministic Decision Engine with a numerical explanation of its reasons;
 - Disclosure, CommunicativeAct, and a local template renderer;
 - Groq rendering for regular dialogue with semantic validation and fallback;
+- a top-down 2D district with solid buildings, a following camera, and moving NPCs;
+- proximity dialogue: walk up to a character and press `E` to talk or introduce yourself;
 - a walking-skeleton interface and headless tests.
 
 The next milestone covers trust-changing actions, unlocking
@@ -67,7 +69,8 @@ known to the player.
 ```text
 game/core/        deterministic simulation and world models
 game/llm/         isolated Groq provider
-game/ui/          visual conversation and social-route screen
+game/world/       2D map, player controller, and NPC movement
+game/ui/          in-world HUD and conversation panel
 game/tests/       headless and integration tests
 docs/             near-term development plan
 scripts/          local launcher with environment variables
@@ -81,6 +84,10 @@ Requires Godot 4.7+.
 
 For a double-click launch, open the `game` folder and run `START_GAME.cmd`. It
 automatically loads the local `.env` through the main launch script.
+
+Controls: `WASD` or the arrow keys to walk, `E` to start or close a nearby
+conversation, and `Esc` to close the dialogue panel. The camera follows the
+player; buildings and the edge of the district block movement.
 
 The simplest way to start the game from PowerShell at the repository root is:
 
@@ -109,6 +116,7 @@ Run the deterministic simulation test:
 
 ```powershell
 godot_console --headless --path ./game --script res://tests/headless_test.gd
+godot_console --headless --path ./game --script res://tests/world_scene_test.gd
 ```
 
 ## Groq API

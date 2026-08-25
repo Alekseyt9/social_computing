@@ -7,8 +7,9 @@
 - [x] Person, Relationship, Fact, Knowledge и SocialEvent.
 - [x] Разделение мировой истины и наблюдаемого знания.
 - [x] Скрытые связи Anna → Sergey → Maria.
-- [ ] AskAbout, AskFavor и AskIntroduction.
-- [ ] DecisionEngine и template Social Renderer.
+- [x] Визуальный экран разговора, цели и социального маршрута.
+- [x] AskAbout, AskFavor и preconditions для AskIntroduction.
+- [x] DecisionEngine, CommunicativeAct и template/Groq Social Renderer.
 
 ## 0. Walking skeleton
 
