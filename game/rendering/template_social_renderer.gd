@@ -56,6 +56,8 @@ static func _fact_clause(fact: Dictionary) -> String:
 
 static func _effect_clause(effect: Dictionary) -> String:
 	match str(effect.get("type", "")):
+		"IDENTITY_EXCHANGED":
+			return "Теперь мы знаем, как обращаться друг к другу."
 		"RELATIONSHIP_IMPROVED":
 			return "Этот разговор помог нам лучше понять друг друга."
 		"HELP_ACCEPTED":

@@ -36,7 +36,7 @@ var _action_counts: Dictionary = {}
 var _invitation_fact_ids: Dictionary = {}
 var _entered_aurora: Dictionary = {}
 var _party_fact_id: int = -1
-var _party_organizer_id: int = 4
+var _event_organizer_fact_ids: Dictionary = {}
 var _next_fact_id: int = 1
 var _next_event_id: int = 1
 
@@ -144,10 +144,45 @@ func introduce_people(first_person_id: int, second_person_id: int) -> Dictionary
 		[] as Array[int]
 	))
 	_next_event_id += 1
+	var relationship: RefCounted = _relationships[
+		_relationship_key(second_person_id, first_person_id)
+	]
+	var decision := {
+		"decision": "ACCEPT",
+		"utility": 1.0,
+		"primary_reason": {"type": "SOCIAL_OPENNESS", "value": 1.0},
+		"positive_components": [],
+		"negative_components": [],
+		"disclosure_score": 1.0,
+		"disclosure_level": "HIGH",
+		"risk": 0.0,
+		"personal_cost": 0.0,
+	}
+	var context := {
+		"actor_name": get_person_name(first_person_id),
+		"target_name": get_person_name(second_person_id),
+	}
+	var effects: Array[Dictionary] = [{
+		"type": "IDENTITY_EXCHANGED",
+		"person_id": second_person_id,
+		"person_name": get_person_name(second_person_id),
+	}]
+	var communicative_act: Dictionary = CommunicativeActScript.build(
+		"IntroduceSelf", decision, relationship, _people[second_person_id],
+		context, [], effects
+	)
 	return {
 		"ok": true,
 		"first_name": get_person_name(first_person_id),
 		"second_name": get_person_name(second_person_id),
+		"action_type": "IntroduceSelf",
+		"player_line": TemplateRendererScript.player_line("IntroduceSelf", context),
+		"decision": decision,
+		"communicative_act": communicative_act,
+		"template_response": TemplateRendererScript.render(communicative_act),
+		"feedback": "Личности раскрыты через событие people_met.",
+		"effects": effects,
+		"goal": get_goal_state(first_person_id),
 	}
 
 
@@ -234,6 +269,10 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 	if not _people.has(actor_id) or not _people.has(target_id):
 		return actions
 	if not is_person_known_to(actor_id, target_id):
+		actions.append({
+			"type": "IntroduceSelf",
+			"context": {"actor_name": get_person_name(actor_id)},
+		})
 		return actions
 
 	actions.append({"type": "BuildRapport", "context": {"topic": "повседневные дела"}})
@@ -259,7 +298,7 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 			},
 		})
 
-	if target_id == _party_organizer_id and _party_fact_id != -1:
+	if _event_organizer_fact_ids.has(target_id) and _party_fact_id != -1:
 		actions.append({
 			"type": "AskInvitation",
 			"context": {"topic": "мероприятие Aurora", "event_fact_id": _party_fact_id},
@@ -289,6 +328,7 @@ func has_aurora_invitation(person_id: int) -> bool:
 
 
 func get_goal_state(observer_id: int) -> Dictionary:
+	var organizer_id := _get_event_organizer_id()
 	if bool(_entered_aurora.get(observer_id, false)):
 		return {
 			"stage": "COMPLETED",
@@ -301,7 +341,7 @@ func get_goal_state(observer_id: int) -> Dictionary:
 			"title": "Войти в Aurora",
 			"hint": "Приглашение получено. Подойдите ко входу в офис.",
 		}
-	if is_person_known_to(observer_id, _party_organizer_id):
+	if organizer_id != -1 and is_person_known_to(observer_id, organizer_id):
 		return {
 			"stage": "REQUEST_INVITATION",
 			"title": "Договориться с организатором",
@@ -351,6 +391,8 @@ func perform_social_action(
 	target_id: int,
 	context: Dictionary = {}
 ) -> Dictionary:
+	if action_type == "IntroduceSelf":
+		return introduce_people(actor_id, target_id)
 	if action_type not in [
 		"BuildRapport", "OfferHelp", "AskAbout", "AskFavor",
 		"AskIntroduction", "AskInvitation"
@@ -374,7 +416,7 @@ func perform_social_action(
 		if not person_knows_fact(actor_id, target_subject_fact_id):
 			return {"ok": false, "error": "INTRODUCTION_SUBJECT_NOT_DISCOVERED"}
 
-	if action_type == "AskInvitation" and target_id != _party_organizer_id:
+	if action_type == "AskInvitation" and not _event_organizer_fact_ids.has(target_id):
 		return {"ok": false, "error": "TARGET_CANNOT_INVITE"}
 
 	var relationship: RefCounted = _relationships[relationship_key]
@@ -618,6 +660,12 @@ func _build_aurora_scenario() -> void:
 	_add_knowledge(4, _party_fact_id, 1.0, 4, 0.25)
 	_add_knowledge(3, _party_fact_id, 0.95, 4, 0.55)
 	_add_knowledge(5, _party_fact_id, 0.80, 13, 0.30)
+	var organizer_fact_id := _add_fact(
+		"person", 4, "organizes_event", _party_fact_id, 0, 1.0, 0.25
+	)
+	_event_organizer_fact_ids[4] = organizer_fact_id
+	_add_knowledge(4, organizer_fact_id, 1.0, 4, 0.0)
+	_add_knowledge(13, organizer_fact_id, 0.9, 4, 0.25)
 	_events.append(SocialEventScript.new(
 		_next_event_id,
 		"event_scheduled",
@@ -745,6 +793,12 @@ func _relationship_key(source_person_id: int, target_person_id: int) -> String:
 
 func _action_count_key(action_type: String, actor_id: int, target_id: int) -> String:
 	return "%s:%d:%d" % [action_type, actor_id, target_id]
+
+
+func _get_event_organizer_id() -> int:
+	for person_id: int in _event_organizer_fact_ids:
+		return person_id
+	return -1
 
 
 func _next_random_int() -> int:

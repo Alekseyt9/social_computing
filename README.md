@@ -53,8 +53,12 @@ Implemented so far:
 - separation between canonical truth and information available to the player;
 - the Aurora scenario with several potential social routes;
 - `AskAbout`, `AskFavor`, and guarded preconditions for `AskIntroduction`;
+- model-generated action affordances (`BuildRapport`, `OfferHelp`, `AskAbout`,
+  `AskIntroduction`, and `AskInvitation`) instead of character-specific UI branches;
+- computed relationship effects, obligations, disclosure, introductions,
+  invitation ownership, and guarded entry into Aurora;
 - a deterministic Decision Engine with a numerical explanation of its reasons;
-- Disclosure, CommunicativeAct, and a local template renderer;
+- Disclosure, CommunicativeAct, and a compositional local renderer;
 - Groq rendering for regular dialogue with semantic validation and fallback;
 - a top-down 2D district with solid buildings, a following camera, and moving NPCs;
 - proximity dialogue: walk up to a character and press `E` to talk or introduce yourself;
@@ -118,6 +122,16 @@ Run the deterministic simulation test:
 godot_console --headless --path ./game --script res://tests/headless_test.gd
 godot_console --headless --path ./game --script res://tests/world_scene_test.gd
 ```
+
+Run the complete Aurora route in batch mode, without graphics or LLM access:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/full_playthrough_test.gd
+```
+
+This test discovers contacts through observer-visible relationship facts, raises
+trust through universal social operators, obtains an invitation from an entity
+that owns the organizer capability fact, and verifies the entrance precondition.
 
 ## Groq API
 

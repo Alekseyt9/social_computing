@@ -6,6 +6,7 @@ const PlayerControllerScript := preload("res://world/player_controller.gd")
 const NpcControllerScript := preload("res://world/npc_controller.gd")
 const GroqClientScript := preload("res://llm/groq_client.gd")
 const SocialRendererScript := preload("res://rendering/social_renderer.gd")
+const SocialActionPresenterScript := preload("res://rendering/social_action_presenter.gd")
 
 const INTERACTION_DISTANCE := 92.0
 const NPC_DATA := [
@@ -14,6 +15,7 @@ const NPC_DATA := [
 	{"id": 5, "position": Vector2(1030, 560), "zone": Rect2(930, 450, 200, 220), "color": Color("6ebbc5")},
 	{"id": 3, "position": Vector2(1080, 720), "zone": Rect2(930, 695, 195, 100), "color": Color("7fa7e8")},
 	{"id": 13, "position": Vector2(1250, 630), "zone": Rect2(1170, 445, 235, 300), "color": Color("bf8cce")},
+	{"id": 4, "position": Vector2(1430, 720), "zone": Rect2(1320, 690, 220, 95), "color": Color("d96f78")},
 	{"id": 16, "position": Vector2(1045, 420), "zone": Rect2(925, 405, 185, 90), "color": Color("8ea0ac")},
 	{"id": 20, "position": Vector2(620, 760), "zone": Rect2(560, 690, 300, 105), "color": Color("6ec18c")},
 	{"id": 7, "position": Vector2(900, 320), "zone": Rect2(700, 220, 350, 180), "color": Color("d19466")},
@@ -28,6 +30,8 @@ var _npc_by_id: Dictionary = {}
 var _simulation_accumulator := 0.0
 var _pending_act: Dictionary = {}
 var _pending_fallback := ""
+var _pending_player_line := ""
+var _near_aurora_entrance := false
 
 var _prompt_panel: PanelContainer
 var _prompt_label: Label
@@ -72,6 +76,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_close_dialogue()
 			elif _nearby_npc != null:
 				_open_dialogue(_nearby_npc)
+			elif _near_aurora_entrance:
+				_open_aurora_entrance()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_ESCAPE and _dialogue_panel.visible:
 			_close_dialogue()
@@ -241,10 +247,13 @@ func _update_nearby_npc() -> void:
 			closest = npc
 			closest_distance = distance
 	_nearby_npc = closest
-	_prompt_panel.visible = closest != null
+	_near_aurora_entrance = player.global_position.distance_to(Vector2(1385, 425)) < 88.0
+	_prompt_panel.visible = closest != null or _near_aurora_entrance
 	if closest != null:
 		var identity: Dictionary = world.get_visible_identity(world.player_id, closest.person_id)
 		_prompt_label.text = "[ E ]  Поговорить  ·  %s" % identity.name
+	elif _near_aurora_entrance:
+		_prompt_label.text = "[ E ]  Войти в Aurora"
 
 
 func _open_dialogue(npc: CharacterBody2D) -> void:
@@ -261,13 +270,9 @@ func _open_dialogue(npc: CharacterBody2D) -> void:
 	_clear_actions()
 	if identity.known:
 		_conversation_label.text = "%s смотрит на вас и ждёт, что вы скажете." % identity.name
-		_add_action_button("Спросить про Aurora", _perform_action.bind("AskAbout", {"topic": "Aurora"}), true)
-		_add_action_button("Попросить об услуге", _perform_action.bind("AskFavor", {}), false)
-		var intro_context := {"subject_person_id": 3}
-		_add_action_button("Попросить знакомство", _perform_action.bind("AskIntroduction", intro_context), false)
 	else:
 		_conversation_label.text = "Незнакомец останавливается рядом. Можно представиться и начать знакомство."
-		_add_action_button("Поздороваться и представиться", _introduce_current_npc, true)
+	_refresh_dialogue_actions()
 
 
 func _close_dialogue() -> void:
@@ -281,30 +286,31 @@ func _close_dialogue() -> void:
 	player.input_enabled = true
 	_pending_act = {}
 	_pending_fallback = ""
+	_pending_player_line = ""
 	_update_nearby_npc()
 
 
-func _introduce_current_npc() -> void:
+func _refresh_dialogue_actions() -> void:
+	_clear_actions()
 	if _dialogue_npc == null:
 		return
-	var result: Dictionary = world.introduce_people(world.player_id, _dialogue_npc.person_id)
-	if not result.ok:
-		_conversation_label.text = "Не удалось начать знакомство: %s" % result.error
-		return
-	var person_name: String = world.get_person_name(_dialogue_npc.person_id)
-	_dialogue_npc.set_known_name(person_name)
-	_speaker_label.text = person_name
-	_role_label.text = world.get_person_role(_dialogue_npc.person_id)
-	_conversation_label.text = "Вы представляетесь друг другу.\n\n%s: «Приятно познакомиться. Что привело тебя в этот район?»" % person_name
-	_clear_actions()
-	_add_action_button("Спросить про Aurora", _perform_action.bind("AskAbout", {"topic": "Aurora"}), true)
-	_add_action_button("Попросить об услуге", _perform_action.bind("AskFavor", {}), false)
-	_update_hud()
+	var actions: Array[Dictionary] = world.get_available_social_actions(
+		world.player_id, _dialogue_npc.person_id
+	)
+	for index in range(actions.size()):
+		var action: Dictionary = actions[index]
+		_add_action_button(
+			SocialActionPresenterScript.button_label(action),
+			_perform_model_action.bind(action),
+			index == 0
+		)
 
 
-func _perform_action(action_type: String, context: Dictionary) -> void:
+func _perform_model_action(action: Dictionary) -> void:
 	if _dialogue_npc == null or groq_client.is_busy():
 		return
+	var action_type := str(action.get("type", ""))
+	var context: Dictionary = action.get("context", {})
 	var result: Dictionary = world.perform_social_action(
 		action_type, world.player_id, _dialogue_npc.person_id, context
 	)
@@ -314,6 +320,7 @@ func _perform_action(action_type: String, context: Dictionary) -> void:
 	_set_action_buttons_disabled(true)
 	_pending_act = result.communicative_act
 	_pending_fallback = result.template_response
+	_pending_player_line = result.player_line
 	var identity := {
 		"name": world.get_person_name(_dialogue_npc.person_id),
 		"role": world.get_person_role(_dialogue_npc.person_id),
@@ -347,27 +354,43 @@ func _show_dialogue_response(response: String, source: String) -> void:
 	if _dialogue_npc == null:
 		return
 	var name: String = world.get_person_name(_dialogue_npc.person_id)
-	var player_line := ""
-	if not _pending_act.is_empty():
-		player_line = _player_line_for_act(_pending_act)
-	_conversation_label.text = "%s\n\n%s: «%s»" % [player_line, name, response]
+	_conversation_label.text = "Вы: «%s»\n\n%s: «%s»" % [_pending_player_line, name, response]
 	_status_label.text = "Текст ответа: %s" % source
-	_set_action_buttons_disabled(false)
 	_pending_act = {}
 	_pending_fallback = ""
+	_pending_player_line = ""
+	_update_npc_labels()
+	_speaker_label.text = name
+	_role_label.text = world.get_person_role(_dialogue_npc.person_id)
+	_refresh_dialogue_actions()
 	_update_hud()
 
 
-func _player_line_for_act(act: Dictionary) -> String:
-	match str(act.get("action_type", "")):
-		"AskAbout":
-			return "Вы: «Ты случайно не знаешь кого-нибудь в Aurora?»"
-		"AskFavor":
-			return "Вы: «Мне нужно попасть на закрытое мероприятие Aurora. Поможешь?»"
-		"AskIntroduction":
-			return "Вы: «Можешь представить меня этому человеку?»"
-		_:
-			return "Вы задаёте вопрос."
+
+
+func _update_npc_labels() -> void:
+	for person_id: int in _npc_by_id:
+		var npc: CharacterBody2D = _npc_by_id[person_id]
+		var identity: Dictionary = world.get_visible_identity(world.player_id, person_id)
+		npc.set_known_name(identity.name)
+
+
+func _open_aurora_entrance() -> void:
+	var result: Dictionary = world.attempt_enter_aurora(world.player_id)
+	player.input_enabled = false
+	player.velocity = Vector2.ZERO
+	_prompt_panel.visible = false
+	_dialogue_panel.visible = true
+	_dialogue_npc = null
+	_speaker_label.text = "Aurora"
+	_role_label.text = "Контроль доступа"
+	_clear_actions()
+	if result.ok:
+		_conversation_label.text = "Приглашение подтверждено. Цель достигнута: вы вошли на закрытое мероприятие."
+		_status_label.text = "Результат вычислен по факту владения пропуском."
+	else:
+		_conversation_label.text = "Доступ пока закрыт: модель мира не нашла у вас действующего приглашения."
+		_status_label.text = "Требование модели: owns_access_token(Aurora Invitation)"
 
 
 func _clear_actions() -> void:
@@ -396,11 +419,8 @@ func _update_hud() -> void:
 	var hour: int = 10 + int(minutes / 60)
 	var minute: int = minutes % 60
 	_clock_label.text = "День 1  ·  %02d:%02d" % [hour, minute]
-	var anna_sergey_fact: int = world.get_relationship_fact_id(2, 3)
-	if anna_sergey_fact != -1 and world.person_knows_fact(world.player_id, anna_sergey_fact):
-		_objective_label.text = "Цель: поговорить с Сергеем у офиса Aurora.\nСвязь Анны с ним уже обнаружена."
-	else:
-		_objective_label.text = "Цель: узнать, как попасть в Aurora.\nНачните с Анны на городской площади."
+	var goal: Dictionary = world.get_goal_state(world.player_id)
+	_objective_label.text = "%s\n%s" % [goal.title, goal.hint]
 
 
 func _style_button(button: Button, primary: bool) -> void:

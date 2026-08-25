@@ -34,6 +34,7 @@ func _draw() -> void:
 
 	_draw_park()
 	_draw_street_details()
+	_draw_aurora_entrance()
 
 
 func _draw_grass_grid() -> void:
@@ -89,6 +90,13 @@ func _draw_crosswalk(origin: Vector2, horizontal: bool) -> void:
 			draw_rect(Rect2(origin + Vector2(offset, 0), Vector2(12, 45)), Color("d8dedb"))
 		else:
 			draw_rect(Rect2(origin + Vector2(0, offset), Vector2(45, 12)), Color("d8dedb"))
+
+
+func _draw_aurora_entrance() -> void:
+	var entrance := Vector2(1385, 418)
+	draw_arc(entrance, 34.0, PI, TAU, 28, Color("72c8d7"), 4.0)
+	draw_circle(entrance, 6.0, Color("f0d28b"))
+	draw_string(ThemeDB.fallback_font, entrance + Vector2(-52, 30), "ВХОД AURORA", HORIZONTAL_ALIGNMENT_CENTER, 104, 14, Color("dcebea"))
 
 
 func _create_world_collisions() -> void:

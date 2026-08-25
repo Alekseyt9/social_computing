@@ -8,6 +8,8 @@ extends RefCounted
 static func button_label(action: Dictionary) -> String:
 	var context: Dictionary = action.get("context", {})
 	match str(action.get("type", "")):
+		"IntroduceSelf":
+			return "Поздороваться и представиться"
 		"BuildRapport":
 			return "Поговорить по-дружески"
 		"OfferHelp":
@@ -26,6 +28,8 @@ static func player_line(action_type: String, context: Dictionary) -> String:
 	var topic := str(context.get("topic", "")).strip_edges()
 	var subject := str(context.get("subject_name", "")).strip_edges()
 	match action_type:
+		"IntroduceSelf":
+			return _join(["Меня", "зовут", str(context.get("actor_name", ""))], ".")
 		"BuildRapport":
 			return _join(["Как", "у тебя", "сегодня", "дела"], "?")
 		"OfferHelp":

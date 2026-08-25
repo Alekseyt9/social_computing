@@ -9,6 +9,9 @@
 - [x] Скрытые связи Anna → Sergey → Maria.
 - [x] Визуальный экран разговора, цели и социального маршрута.
 - [x] AskAbout, AskFavor и preconditions для AskIntroduction.
+- [x] Универсальные BuildRapport, OfferHelp и AskInvitation.
+- [x] Доступные действия вычисляются SimulationWorld, а не UI.
+- [x] Полный headless-маршрут до входа в Aurora.
 - [x] DecisionEngine, CommunicativeAct и template/Groq Social Renderer.
 
 ## 0. Walking skeleton
