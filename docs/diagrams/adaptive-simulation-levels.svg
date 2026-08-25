@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">Уровни адаптивной социальной симуляции</title>
+  <desc id="desc">Четыре уровня детализации: агрегаты населения, лёгкие агенты, постоянные NPC и активные NPC. Чем ближе сущность к игроку и текущей ситуации, тем выше детализация и ниже количество объектов.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#111a31"/>
+    </linearGradient>
+    <linearGradient id="l3" x1="0" x2="1"><stop stop-color="#223557"/><stop offset="1" stop-color="#2c4b72"/></linearGradient>
+    <linearGradient id="l2" x1="0" x2="1"><stop stop-color="#23475e"/><stop offset="1" stop-color="#287078"/></linearGradient>
+    <linearGradient id="l1" x1="0" x2="1"><stop stop-color="#245e58"/><stop offset="1" stop-color="#2f8b75"/></linearGradient>
+    <linearGradient id="l0" x1="0" x2="1"><stop stop-color="#704556"/><stop offset="1" stop-color="#a85f67"/></linearGradient>
+    <marker id="down" markerWidth="10" markerHeight="10" refX="5" refY="8" orient="auto"><path d="M0 0L10 0L5 10Z" fill="#ffd166"/></marker>
+    <style>
+      .title{font:700 34px 'Segoe UI',Arial,sans-serif;fill:#f7f8fc}
+      .subtitle{font:400 18px 'Segoe UI',Arial,sans-serif;fill:#aab3c5}
+      .level{font:800 24px 'Segoe UI',Arial,sans-serif;fill:#f7f8fc}
+      .name{font:700 21px 'Segoe UI',Arial,sans-serif;fill:#f7f8fc}
+      .meta{font:400 16px 'Segoe UI',Arial,sans-serif;fill:#d6dbea}
+      .axis{font:700 15px 'Segoe UI',Arial,sans-serif;fill:#ffd166;letter-spacing:1px}
+    </style>
+  </defs>
+  <rect width="1200" height="675" rx="28" fill="url(#bg)"/>
+  <text x="54" y="64" class="title">Adaptive Social Simulation</text>
+  <text x="54" y="96" class="subtitle">Мир масштабируется за счёт социальной детализации по релевантности</text>
+
+  <path d="M1095 150V526" stroke="#ffd166" stroke-width="3" marker-end="url(#down)"/>
+  <text x="1125" y="340" class="axis" transform="rotate(90 1125 340)">ДЕТАЛИЗАЦИЯ РАСТЁТ</text>
+
+  <path d="M100 522V153" stroke="#6ea8fe" stroke-width="3"/>
+  <path d="M94 165L100 151L106 165" fill="none" stroke="#6ea8fe" stroke-width="3"/>
+  <text x="72" y="415" class="axis" fill="#8eb8ff" transform="rotate(-90 72 415)">МАСШТАБ НАСЕЛЕНИЯ</text>
+
+  <rect x="150" y="135" width="850" height="86" rx="18" fill="url(#l3)" stroke="#486a98"/>
+  <text x="178" y="171" class="level">L3</text>
+  <text x="250" y="171" class="name">Population Aggregate</text>
+  <text x="250" y="199" class="meta">районы · демография · массовые тренды · 100 000+ жителей</text>
+  <text x="956" y="186" text-anchor="end" class="meta">дёшево</text>
+
+  <rect x="220" y="246" width="710" height="86" rx="18" fill="url(#l2)" stroke="#3d8d98"/>
+  <text x="248" y="282" class="level">L2</text>
+  <text x="320" y="282" class="name">Lightweight Agent</text>
+  <text x="320" y="310" class="meta">роль · место · несколько связей · редкие обновления</text>
+  <text x="886" y="297" text-anchor="end" class="meta">тысячи</text>
+
+  <rect x="290" y="357" width="570" height="86" rx="18" fill="url(#l1)" stroke="#4db395"/>
+  <text x="318" y="393" class="level">L1</text>
+  <text x="390" y="393" class="name">Persistent NPC</text>
+  <text x="390" y="421" class="meta">личность · знания · отношения · история</text>
+  <text x="816" y="408" text-anchor="end" class="meta">десятки</text>
+
+  <rect x="360" y="468" width="430" height="86" rx="18" fill="url(#l0)" stroke="#d47a83"/>
+  <text x="388" y="504" class="level">L0</text>
+  <text x="460" y="504" class="name">Active NPC</text>
+  <text x="460" y="532" class="meta">решения · диалог · контекст сейчас</text>
+  <text x="746" y="519" text-anchor="end" class="meta">5–15</text>
+
+  <rect x="150" y="588" width="850" height="42" rx="21" fill="#151e34" stroke="#33405e"/>
+  <text x="575" y="615" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="16" font-weight="700" fill="#f7f8fc">Refinement ↔ Coarsening сохраняют identity, связи и важные события</text>
+</svg>

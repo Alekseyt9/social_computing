@@ -10,6 +10,15 @@
 исследовать связи между персонажами, договариваться, помогать им и находить
 альтернативные социальные пути.
 
+[![Три социальных пути к закрытой вечеринке Aurora](docs/diagrams/aurora-social-paths.svg)](docs/diagrams/aurora-social-paths.svg)
+
+## Игровой цикл
+
+Игрок не нажимает абстрактную кнопку убеждения. Он выясняет, почему человек не
+готов помочь, меняет отношения или обстоятельства и пробует новый путь.
+
+[![Игровой цикл Social Immersive Sim](docs/diagrams/gameplay-loop.svg)](docs/diagrams/gameplay-loop.svg)
+
 ## Основные принципы
 
 - состояние мира и знания персонажей хранятся раздельно;
@@ -23,6 +32,16 @@
 World → Social Simulation → NPC Decision → Communicative Act
       → Social Renderer → LLM или шаблон → Реплика игроку
 ```
+
+[![Архитектура Social Rendering](docs/diagrams/social-rendering-pipeline.svg)](docs/diagrams/social-rendering-pipeline.svg)
+
+### Адаптивная детализация
+
+По мере приближения к игроку и текущей ситуации агрегаты превращаются в
+индивидуальных агентов. В обратную сторону детали сворачиваются без потери
+важной истории и persistent identity.
+
+[![Уровни адаптивной социальной симуляции](docs/diagrams/adaptive-simulation-levels.svg)](docs/diagrams/adaptive-simulation-levels.svg)
 
 ## Текущий прототип
 
@@ -45,6 +64,7 @@ renderer и карта известных игроку связей.
 ```text
 game/core/        детерминированная симуляция и модели мира
 game/llm/         изолированный провайдер Groq
+game/ui/          визуальный экран разговора и социального маршрута
 game/tests/       headless и integration-тесты
 docs/             план ближайших этапов
 scripts/          локальный запуск с переменными окружения
@@ -56,14 +76,33 @@ scripts/          локальный запуск с переменными ок
 
 Требуется Godot 4.7+.
 
+Самый простой способ запустить игру из PowerShell в корне проекта:
+
 ```powershell
+.\scripts\run-godot.ps1
+```
+
+Открыть проект в редакторе:
+
+```powershell
+.\scripts\run-godot.ps1 -Editor
+```
+
+В редакторе нажмите **F6** для текущей сцены или **F5** для всего проекта.
+Groq не обязателен: без API-ключа игра запускается с локальным шаблонным
+renderer.
+
+Прямой запуск без вспомогательного скрипта:
+
+```powershell
+godot --path ./game
 godot --editor --path ./game
 ```
 
 Проверка детерминированной симуляции:
 
 ```powershell
-godot --headless --path ./game --script res://tests/headless_test.gd
+godot_console --headless --path ./game --script res://tests/headless_test.gd
 ```
 
 ## Groq API

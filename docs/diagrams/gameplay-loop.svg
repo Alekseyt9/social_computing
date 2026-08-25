@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">Игровой цикл Social Immersive Sim</title>
+  <desc id="desc">Цикл начинается с цели игрока, затем открывается возможность, выполняется социальное действие, NPC принимает решение, игрок получает результат и новое знание, меняет обстоятельства и пробует снова.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0b1020"/><stop offset="1" stop-color="#111a31"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#6ea8fe"/></marker>
+    <style>
+      .title{font:700 34px 'Segoe UI',Arial,sans-serif;fill:#f7f8fc}
+      .subtitle{font:400 18px 'Segoe UI',Arial,sans-serif;fill:#aab3c5}
+      .card{fill:#151e34;stroke:#33405e;stroke-width:2}
+      .step{font:700 18px 'Segoe UI',Arial,sans-serif;fill:#f7f8fc;text-anchor:middle}
+      .meta{font:400 14px 'Segoe UI',Arial,sans-serif;fill:#aab3c5;text-anchor:middle}
+      .edge{stroke:#6ea8fe;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="675" rx="28" fill="url(#bg)"/>
+  <text x="54" y="64" class="title">Игровой цикл: понять человека и изменить обстоятельства</text>
+  <text x="54" y="96" class="subtitle">Отказ — это диагностический результат и новый social problem, а не тупик</text>
+
+  <circle cx="600" cy="360" r="96" fill="#18253a" stroke="#4ee1c1" stroke-width="3"/>
+  <text x="600" y="338" class="step">SOCIAL</text>
+  <text x="600" y="364" class="step">DISCOVERY</text>
+  <text x="600" y="394" class="meta">узнать кто, почему</text>
+  <text x="600" y="414" class="meta">и что можно изменить</text>
+
+  <rect x="80" y="160" width="190" height="92" rx="18" class="card"/>
+  <circle cx="111" cy="190" r="10" fill="#ff7a8a"/>
+  <text x="175" y="194" class="step">1 · ЦЕЛЬ</text>
+  <text x="175" y="223" class="meta">попасть на Aurora Party</text>
+
+  <rect x="360" y="112" width="190" height="92" rx="18" class="card"/>
+  <circle cx="391" cy="142" r="10" fill="#6ea8fe"/>
+  <text x="455" y="146" class="step">2 · ВОЗМОЖНОСТЬ</text>
+  <text x="455" y="175" class="meta">контакт · слух · услуга</text>
+
+  <rect x="650" y="112" width="190" height="92" rx="18" class="card"/>
+  <circle cx="681" cy="142" r="10" fill="#ffd166"/>
+  <text x="745" y="146" class="step">3 · ДЕЙСТВИЕ</text>
+  <text x="745" y="175" class="meta">ask · favor · introduce</text>
+
+  <rect x="930" y="160" width="190" height="92" rx="18" class="card"/>
+  <circle cx="961" cy="190" r="10" fill="#4ee1c1"/>
+  <text x="1025" y="194" class="step">4 · РЕШЕНИЕ NPC</text>
+  <text x="1025" y="223" class="meta">utility + причина</text>
+
+  <rect x="930" y="466" width="190" height="92" rx="18" class="card"/>
+  <circle cx="961" cy="496" r="10" fill="#4ee1c1"/>
+  <text x="1025" y="500" class="step">5 · РЕЗУЛЬТАТ</text>
+  <text x="1025" y="529" class="meta">да · нет · переговоры</text>
+
+  <rect x="650" y="514" width="190" height="92" rx="18" class="card"/>
+  <circle cx="681" cy="544" r="10" fill="#ffd166"/>
+  <text x="745" y="548" class="step">6 · ЗНАНИЕ</text>
+  <text x="745" y="577" class="meta">причина · связь · шанс</text>
+
+  <rect x="360" y="514" width="190" height="92" rx="18" class="card"/>
+  <circle cx="391" cy="544" r="10" fill="#6ea8fe"/>
+  <text x="455" y="548" class="step">7 · ИЗМЕНЕНИЕ</text>
+  <text x="455" y="577" class="meta">помочь · убедить · обойти</text>
+
+  <rect x="80" y="466" width="190" height="92" rx="18" class="card"/>
+  <circle cx="111" cy="496" r="10" fill="#ff7a8a"/>
+  <text x="175" y="500" class="step">8 · НОВАЯ ПОПЫТКА</text>
+  <text x="175" y="529" class="meta">другой путь или контекст</text>
+
+  <path d="M270 184C300 156 320 150 350 150" class="edge"/>
+  <path d="M550 158H640" class="edge"/>
+  <path d="M840 158C870 158 900 180 920 194" class="edge"/>
+  <path d="M1025 252V456" class="edge"/>
+  <path d="M930 526C900 554 880 560 850 560" class="edge"/>
+  <path d="M650 560H560" class="edge"/>
+  <path d="M360 560C330 560 300 538 280 524" class="edge"/>
+  <path d="M175 466V262" class="edge"/>
+
+  <path d="M510 310C470 265 430 236 390 212" stroke="#33405e" stroke-width="2" stroke-dasharray="6 6" fill="none"/>
+  <path d="M690 310C735 270 785 240 830 214" stroke="#33405e" stroke-width="2" stroke-dasharray="6 6" fill="none"/>
+  <path d="M690 410C735 450 785 480 830 506" stroke="#33405e" stroke-width="2" stroke-dasharray="6 6" fill="none"/>
+  <path d="M510 410C470 450 430 480 390 506" stroke="#33405e" stroke-width="2" stroke-dasharray="6 6" fill="none"/>
+</svg>
