@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
   <title id="title">Social Rendering pipeline</title>
-  <desc id="desc">Поток от состояния мира и решения NPC к структурированному коммуникативному акту, рендерингу через шаблон или Groq и видимой игроку реплике. LLM не изменяет мир.</desc>
+  <desc id="desc">A pipeline from world state and NPC decisions to a structured communicative act, rendering through a template or Groq, and player-visible dialogue. The LLM cannot change the world.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0b1020"/>
@@ -21,13 +21,13 @@
   </defs>
   <rect width="1200" height="675" rx="28" fill="url(#bg)"/>
   <text x="54" y="64" class="title">Social Rendering</text>
-  <text x="54" y="96" class="subtitle">Симуляция решает «что и почему», языковая модель — только «как это выразить»</text>
+  <text x="54" y="96" class="subtitle">The simulation decides what and why; the language model decides only how to express it</text>
 
   <rect x="42" y="176" width="160" height="126" rx="18" class="card"/>
   <circle cx="122" cy="201" r="8" fill="#4ee1c1"/>
   <text x="122" y="236" class="step">WORLD</text>
-  <text x="122" y="264" class="meta">факты · связи</text>
-  <text x="122" y="285" class="meta">знания · события</text>
+  <text x="122" y="264" class="meta">facts · relationships</text>
+  <text x="122" y="285" class="meta">knowledge · events</text>
 
   <rect x="238" y="176" width="160" height="126" rx="18" class="card"/>
   <circle cx="318" cy="201" r="8" fill="#4ee1c1"/>
@@ -57,7 +57,7 @@
   <circle cx="1090" cy="201" r="8" fill="#ff7a8a"/>
   <text x="1090" y="232" class="step">PLAYER</text>
   <text x="1090" y="254" class="step">OUTPUT</text>
-  <text x="1090" y="282" class="meta">реплика · реакция</text>
+  <text x="1090" y="282" class="meta">dialogue · reaction</text>
 
   <path d="M202 239H228" class="arrow"/>
   <path d="M398 239H424" class="arrow"/>
@@ -66,17 +66,17 @@
   <path d="M986 239H1012" class="arrow"/>
 
   <rect x="42" y="364" width="748" height="72" rx="14" fill="#0e2a29" stroke="#23776b"/>
-  <text x="66" y="395" class="lane" fill="#4ee1c1">ДЕТЕРМИНИРОВАННАЯ ЗОНА</text>
-  <text x="66" y="420" class="subtitle">истина мира, решения и причины воспроизводимы по seed</text>
+  <text x="66" y="395" class="lane" fill="#4ee1c1">DETERMINISTIC ZONE</text>
+  <text x="66" y="420" class="subtitle">world truth, decisions, and reasons are reproducible from the seed</text>
 
   <rect x="826" y="364" width="332" height="72" rx="14" fill="#261d32" stroke="#744b75"/>
-  <text x="850" y="395" class="lane" fill="#ff9aac">ТЕКСТОВАЯ ЗОНА</text>
-  <text x="850" y="420" class="subtitle">выразить смысл, не придумать его</text>
+  <text x="850" y="395" class="lane" fill="#ff9aac">TEXT ZONE</text>
+  <text x="850" y="420" class="subtitle">express meaning, never invent it</text>
 
   <path d="M808 342V468" stroke="#ff7a8a" stroke-width="2" stroke-dasharray="7 7"/>
   <rect x="673" y="475" width="270" height="54" rx="27" fill="#321e2b" stroke="#ff7a8a" stroke-width="2"/>
-  <text x="808" y="508" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#ff9aac">LLM НЕ ПИШЕТ В WORLD</text>
+  <text x="808" y="508" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#ff9aac">LLM CANNOT WRITE TO WORLD</text>
 
-  <text x="54" y="603" class="subtitle">Fallback: если API недоступен, тот же Communicative Act рендерится шаблоном.</text>
+  <text x="54" y="603" class="subtitle">Fallback: if the API is unavailable, the same Communicative Act is rendered by a template.</text>
   <rect x="54" y="625" width="1092" height="2" fill="#26324b"/>
 </svg>

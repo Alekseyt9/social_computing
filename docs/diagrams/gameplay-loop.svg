@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
-  <title id="title">Игровой цикл Social Immersive Sim</title>
-  <desc id="desc">Цикл начинается с цели игрока, затем открывается возможность, выполняется социальное действие, NPC принимает решение, игрок получает результат и новое знание, меняет обстоятельства и пробует снова.</desc>
+  <title id="title">Social Immersive Sim Gameplay Loop</title>
+  <desc id="desc">The loop starts with a player goal, followed by discovering an opportunity, attempting a social action, an NPC decision, a result and new knowledge, changing circumstances, and trying again.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0b1020"/><stop offset="1" stop-color="#111a31"/></linearGradient>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#6ea8fe"/></marker>
@@ -14,54 +14,54 @@
     </style>
   </defs>
   <rect width="1200" height="675" rx="28" fill="url(#bg)"/>
-  <text x="54" y="64" class="title">Игровой цикл: понять человека и изменить обстоятельства</text>
-  <text x="54" y="96" class="subtitle">Отказ — это диагностический результат и новый social problem, а не тупик</text>
+  <text x="54" y="64" class="title">Gameplay loop: understand people, change circumstances</text>
+  <text x="54" y="96" class="subtitle">A refusal is diagnostic feedback and a new social problem—not a dead end</text>
 
   <circle cx="600" cy="360" r="96" fill="#18253a" stroke="#4ee1c1" stroke-width="3"/>
   <text x="600" y="338" class="step">SOCIAL</text>
   <text x="600" y="364" class="step">DISCOVERY</text>
-  <text x="600" y="394" class="meta">узнать кто, почему</text>
-  <text x="600" y="414" class="meta">и что можно изменить</text>
+  <text x="600" y="394" class="meta">learn who, why,</text>
+  <text x="600" y="414" class="meta">and what can change</text>
 
   <rect x="80" y="160" width="190" height="92" rx="18" class="card"/>
   <circle cx="111" cy="190" r="10" fill="#ff7a8a"/>
-  <text x="175" y="194" class="step">1 · ЦЕЛЬ</text>
-  <text x="175" y="223" class="meta">попасть на Aurora Party</text>
+  <text x="175" y="194" class="step">1 · GOAL</text>
+  <text x="175" y="223" class="meta">reach the Aurora Party</text>
 
   <rect x="360" y="112" width="190" height="92" rx="18" class="card"/>
   <circle cx="391" cy="142" r="10" fill="#6ea8fe"/>
-  <text x="455" y="146" class="step">2 · ВОЗМОЖНОСТЬ</text>
-  <text x="455" y="175" class="meta">контакт · слух · услуга</text>
+  <text x="455" y="146" class="step">2 · OPPORTUNITY</text>
+  <text x="455" y="175" class="meta">contact · rumor · favor</text>
 
   <rect x="650" y="112" width="190" height="92" rx="18" class="card"/>
   <circle cx="681" cy="142" r="10" fill="#ffd166"/>
-  <text x="745" y="146" class="step">3 · ДЕЙСТВИЕ</text>
+  <text x="745" y="146" class="step">3 · ACTION</text>
   <text x="745" y="175" class="meta">ask · favor · introduce</text>
 
   <rect x="930" y="160" width="190" height="92" rx="18" class="card"/>
   <circle cx="961" cy="190" r="10" fill="#4ee1c1"/>
-  <text x="1025" y="194" class="step">4 · РЕШЕНИЕ NPC</text>
-  <text x="1025" y="223" class="meta">utility + причина</text>
+  <text x="1025" y="194" class="step">4 · NPC DECISION</text>
+  <text x="1025" y="223" class="meta">utility + reason</text>
 
   <rect x="930" y="466" width="190" height="92" rx="18" class="card"/>
   <circle cx="961" cy="496" r="10" fill="#4ee1c1"/>
-  <text x="1025" y="500" class="step">5 · РЕЗУЛЬТАТ</text>
-  <text x="1025" y="529" class="meta">да · нет · переговоры</text>
+  <text x="1025" y="500" class="step">5 · OUTCOME</text>
+  <text x="1025" y="529" class="meta">yes · no · negotiate</text>
 
   <rect x="650" y="514" width="190" height="92" rx="18" class="card"/>
   <circle cx="681" cy="544" r="10" fill="#ffd166"/>
-  <text x="745" y="548" class="step">6 · ЗНАНИЕ</text>
-  <text x="745" y="577" class="meta">причина · связь · шанс</text>
+  <text x="745" y="548" class="step">6 · KNOWLEDGE</text>
+  <text x="745" y="577" class="meta">reason · connection · chance</text>
 
   <rect x="360" y="514" width="190" height="92" rx="18" class="card"/>
   <circle cx="391" cy="544" r="10" fill="#6ea8fe"/>
-  <text x="455" y="548" class="step">7 · ИЗМЕНЕНИЕ</text>
-  <text x="455" y="577" class="meta">помочь · убедить · обойти</text>
+  <text x="455" y="548" class="step">7 · CHANGE</text>
+  <text x="455" y="577" class="meta">help · persuade · bypass</text>
 
   <rect x="80" y="466" width="190" height="92" rx="18" class="card"/>
   <circle cx="111" cy="496" r="10" fill="#ff7a8a"/>
-  <text x="175" y="500" class="step">8 · НОВАЯ ПОПЫТКА</text>
-  <text x="175" y="529" class="meta">другой путь или контекст</text>
+  <text x="175" y="500" class="step">8 · TRY AGAIN</text>
+  <text x="175" y="529" class="meta">another path or context</text>
 
   <path d="M270 184C300 156 320 150 350 150" class="edge"/>
   <path d="M550 158H640" class="edge"/>

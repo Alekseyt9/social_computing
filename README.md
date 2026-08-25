@@ -1,105 +1,111 @@
 # Adaptive Social Immersive Sim
 
-Экспериментальный одиночный **social immersive sim** на Godot 4. Игрок — не
-управляющий обществом, а обычный участник живого социального мира. Цели
-достигаются через знакомства, доверие, информацию, репутацию, услуги и
-организации.
+An experimental single-player **social immersive sim** built with Godot 4. The
+player is not an overseer managing society from above, but an ordinary
+participant in a living social world. Goals are achieved through connections,
+trust, information, reputation, favors, and organizations.
 
-Первый vertical slice строится вокруг задачи попасть на закрытую вечеринку
-компании **Aurora**. У неё нет одного заранее заданного решения: игрок должен
-исследовать связи между персонажами, договариваться, помогать им и находить
-альтернативные социальные пути.
+The first vertical slice revolves around gaining access to a private **Aurora**
+party. There is no single predefined solution: the player must investigate
+relationships, negotiate, help people, and discover alternative social paths.
 
-[![Три социальных пути к закрытой вечеринке Aurora](docs/diagrams/aurora-social-paths.svg)](docs/diagrams/aurora-social-paths.svg)
+[![Three social paths to the private Aurora party](docs/diagrams/aurora-social-paths.svg)](docs/diagrams/aurora-social-paths.svg)
 
-## Игровой цикл
+## Gameplay Loop
 
-Игрок не нажимает абстрактную кнопку убеждения. Он выясняет, почему человек не
-готов помочь, меняет отношения или обстоятельства и пробует новый путь.
+The player does not press an abstract persuasion button. They learn why someone
+is unwilling to help, change the relationship or circumstances, and try a new
+path.
 
-[![Игровой цикл Social Immersive Sim](docs/diagrams/gameplay-loop.svg)](docs/diagrams/gameplay-loop.svg)
+[![Social Immersive Sim gameplay loop](docs/diagrams/gameplay-loop.svg)](docs/diagrams/gameplay-loop.svg)
 
-## Основные принципы
+## Core Principles
 
-- состояние мира и знания персонажей хранятся раздельно;
-- решения NPC вычисляет детерминированная симуляция, а не LLM;
-- **Social Renderer** превращает готовое структурированное решение в реплику;
-- Groq отвечает только за форму текста и не может изменять состояние мира;
-- детализация агентов должна адаптироваться от групп населения до активных NPC;
-- симуляция запускается без интерфейса и воспроизводится по seed.
+- world state and character knowledge are stored separately;
+- NPC decisions are computed by a deterministic simulation, not by an LLM;
+- the **Social Renderer** turns a structured decision into natural dialogue;
+- Groq controls only the wording and cannot change world state;
+- agent detail adapts from population groups down to active NPCs;
+- the simulation runs headlessly and is reproducible from a seed.
 
 ```text
 World → Social Simulation → NPC Decision → Communicative Act
-      → Social Renderer → LLM или шаблон → Реплика игроку
+      → Social Renderer → LLM or template → Player-visible dialogue
 ```
 
-[![Архитектура Social Rendering](docs/diagrams/social-rendering-pipeline.svg)](docs/diagrams/social-rendering-pipeline.svg)
+[![Social Rendering architecture](docs/diagrams/social-rendering-pipeline.svg)](docs/diagrams/social-rendering-pipeline.svg)
 
-### Адаптивная детализация
+### Adaptive Detail
 
-По мере приближения к игроку и текущей ситуации агрегаты превращаются в
-индивидуальных агентов. В обратную сторону детали сворачиваются без потери
-важной истории и persistent identity.
+As entities become more relevant to the player and the current situation,
+aggregates refine into individual agents. In the other direction, detail is
+coarsened without losing important history or persistent identity.
 
-[![Уровни адаптивной социальной симуляции](docs/diagrams/adaptive-simulation-levels.svg)](docs/diagrams/adaptive-simulation-levels.svg)
+[![Adaptive social simulation levels](docs/diagrams/adaptive-simulation-levels.svg)](docs/diagrams/adaptive-simulation-levels.svg)
 
-## Текущий прототип
+## Current Prototype
 
-Уже реализованы:
+Implemented so far:
 
-- детерминированное ядро `SimulationWorld`;
-- игрок, 20 NPC, Office, Cafe и Apartment;
-- модели людей, организаций, отношений, фактов, знаний и событий;
-- разделение канонической истины и доступной игроку информации;
-- сценарий Aurora и несколько потенциальных социальных маршрутов;
-- изолированный Groq-клиент с безопасной загрузкой API-ключа;
-- интерфейс walking skeleton и headless-тесты.
+- deterministic `SimulationWorld` core;
+- the player, 20 NPCs, an Office, a Cafe, and an Apartment;
+- models for people, organizations, relationships, facts, knowledge, and events;
+- separation between canonical truth and information available to the player;
+- the Aurora scenario with several potential social routes;
+- `AskAbout`, `AskFavor`, and guarded preconditions for `AskIntroduction`;
+- a deterministic Decision Engine with a numerical explanation of its reasons;
+- Disclosure, CommunicativeAct, and a local template renderer;
+- Groq rendering for regular dialogue with semantic validation and fallback;
+- a walking-skeleton interface and headless tests.
 
-Ближайший milestone: социальные действия `AskAbout`, `AskFavor` и
-`AskIntroduction`, Decision Engine, раскрытие причин решений NPC, fallback
-renderer и карта известных игроку связей.
+The next milestone covers trust-changing actions, unlocking
+`AskIntroduction`, an NPC decision debug inspector, and a map of relationships
+known to the player.
 
-## Структура
+## Project Structure
 
 ```text
-game/core/        детерминированная симуляция и модели мира
-game/llm/         изолированный провайдер Groq
-game/ui/          визуальный экран разговора и социального маршрута
-game/tests/       headless и integration-тесты
-docs/             план ближайших этапов
-scripts/          локальный запуск с переменными окружения
+game/core/        deterministic simulation and world models
+game/llm/         isolated Groq provider
+game/ui/          visual conversation and social-route screen
+game/tests/       headless and integration tests
+docs/             near-term development plan
+scripts/          local launcher with environment variables
 ```
 
-Полное техническое задание: [adaptive_social_immersive_sim_codex_spec.md](adaptive_social_immersive_sim_codex_spec.md).
+Full technical specification: [adaptive_social_immersive_sim_codex_spec.md](adaptive_social_immersive_sim_codex_spec.md).
 
-## Запуск
+## Running the Project
 
-Требуется Godot 4.7+.
+Requires Godot 4.7+.
 
-Самый простой способ запустить игру из PowerShell в корне проекта:
+For a double-click launch, open the `game` folder and run `START_GAME.cmd`. It
+automatically loads the local `.env` through the main launch script.
+
+The simplest way to start the game from PowerShell at the repository root is:
 
 ```powershell
 .\scripts\run-godot.ps1
 ```
 
-Открыть проект в редакторе:
+Open the project in the editor:
 
 ```powershell
 .\scripts\run-godot.ps1 -Editor
 ```
 
-В редакторе нажмите **F6** для текущей сцены или **F5** для всего проекта.
-Groq не обязателен: без API-ключа игра запускается с локальным шаблонным
+In the editor, press **F6** to run the current scene or **F5** to run the full
+project. Groq is optional: without an API key, the game uses the local template
 renderer.
 
-Прямой запуск без вспомогательного скрипта:
+Direct launch without the helper script:
 
 ```powershell
 godot --path ./game
 godot --editor --path ./game
 ```
 
-Проверка детерминированной симуляции:
+Run the deterministic simulation test:
 
 ```powershell
 godot_console --headless --path ./game --script res://tests/headless_test.gd
@@ -107,8 +113,7 @@ godot_console --headless --path ./game --script res://tests/headless_test.gd
 
 ## Groq API
 
-Скопируйте пример конфигурации и добавьте собственный ключ только в локальный
-`.env`:
+Copy the example configuration and add your key only to the local `.env` file:
 
 ```powershell
 Copy-Item .env.example .env
@@ -120,8 +125,8 @@ GROQ_API_KEY=gsk_...
 GROQ_MODEL=openai/gpt-oss-20b
 ```
 
-Файл `.env` находится в `.gitignore`; настоящий API-ключ не должен попадать в
-Git, логи или сообщения. Реальный integration-тест выполняется командой:
+The `.env` file is listed in `.gitignore`; a real API key must never be committed
+to Git or included in logs or messages. Run the live integration test with:
 
 ```powershell
 godot --headless --path ./game --script res://tests/groq_integration_test.gd
