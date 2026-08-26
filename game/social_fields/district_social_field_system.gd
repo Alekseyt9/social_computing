@@ -32,6 +32,17 @@ func advance_day(population_snapshot: Dictionary) -> Dictionary:
 	)
 	var average_money := float(population_snapshot.get("total_money_cents", 0)) / float(population)
 	var observed_wealth := clampf(average_money / 200_000.0, 0.02, 1.0)
+	var agent_feedback: Dictionary = population_snapshot.get("feedback", {})
+	var observed_agent_wealth := clampf(
+		float(agent_feedback.get("average_wealth", observed_wealth)), 0.0, 1.0
+	)
+	var observed_agent_stress := clampf(
+		float(agent_feedback.get("average_stress", stress)), 0.0, 1.0
+	)
+	var observed_agent_spending := clampf(
+		float(agent_feedback.get("average_spending", spending)), 0.0, 1.0
+	)
+	observed_wealth = observed_wealth * 0.70 + observed_agent_wealth * 0.30
 	var rumor_capacity := float(population * 8)
 	var observed_information := clampf(
 		float(population_snapshot.get("rumor_knowledge_edges", 0)) / maxf(1.0, rumor_capacity),
@@ -44,8 +55,12 @@ func advance_day(population_snapshot: Dictionary) -> Dictionary:
 		+ (1.0 - wealth) * 0.15,
 		0.0, 1.0
 	)
+	target_stress = clampf(target_stress * 0.80 + observed_agent_stress * 0.20, 0.0, 1.0)
 	var target_spending := clampf(
 		wealth * (1.0 - target_stress * 0.72) * (0.75 + trust * 0.25), 0.0, 1.0
+	)
+	target_spending = clampf(
+		target_spending * 0.75 + observed_agent_spending * 0.25, 0.0, 1.0
 	)
 	var target_business := clampf(
 		0.10 + target_spending * 0.92 - crime * 0.20 - social_tension * 0.12,

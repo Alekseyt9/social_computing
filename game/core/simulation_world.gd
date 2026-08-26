@@ -704,6 +704,7 @@ func get_debug_inspector(person_id: int, observer_id: int) -> Dictionary:
 		},
 		"relationship_to_observer": get_relationship_state(person_id, observer_id),
 		"needs": get_need_profile(person_id),
+		"current_activity": get_person_activity_view(person_id),
 		"known_fact_count": known_fact_summaries.size(),
 		"known_facts": known_fact_summaries,
 		"last_decision": _last_decision_by_person.get(person_id, {}).duplicate(true),
@@ -1688,14 +1689,21 @@ func _reduce_need(person_id: int, need_type: String, amount: float) -> void:
 func _activity_need_type(activity: String) -> String:
 	return {
 		"WORK": "REPUTATION",
+		"TEAMWORK": "REPUTATION",
+		"WORK_BREAK": "SUPPORT",
 		"JOB_SEARCH": "RESOURCES",
 		"ERRANDS": "RESOURCES",
+		"CAFE_MEAL": "RESOURCES",
 		"LEISURE": "SUPPORT",
+		"EXERCISE": "SECURITY",
 		"SOCIAL": "SUPPORT",
+		"VISIT_FRIEND": "SUPPORT",
 		"COMMUNITY": "REPUTATION",
 		"HEALTH": "SECURITY",
 		"CRAFT": "RESOURCES",
+		"STUDY": "INFORMATION",
 		"HOME": "SECURITY",
+		"REST": "SECURITY",
 	}.get(activity, "SUPPORT")
 
 

@@ -413,7 +413,7 @@ Run the two-week deterministic reconstruction test:
 godot_console --headless --path ./game --script res://tests/milestone5_lazy_history_test.gd
 ```
 
-### GPU population operators and spatial neighborhoods (MS6.3)
+### GPU population operators, spatial neighborhoods and cohorts (MS6.4)
 
 The first MS6 operator is connected to the live `PackedLightAgentStore`. Every
 resident now carries wealth, stress, spending and activity in four additional
@@ -447,10 +447,22 @@ area work to a fixed number of candidates.
 The GPU builds the grid with deterministic `atomicMin` representatives and runs
 the neighborhood query in a second dispatch after a compute barrier. The CPU
 result remains canonical and is compared against the complete GPU neighbor
-buffer. Every 72 simulation ticks, the resulting physical neighbor can become a
+buffer. Every 144 simulation ticks, the resulting physical neighbor can become a
 real gossip source; existing social contacts remain the fallback. Spatial
 backend status, parity, neighbor coverage, transfer counts and resource reuse
 are included under `ms6.spatial` in the `F3` metrics payload.
+
+Daily aggregate feedback now uses a third compute operator. Every resident is
+encoded into one of 24 stable employment/workplace/schedule cohorts; one GPU
+workgroup per cohort reduces wealth, stress, spending, activity and member
+count. Only 480 bytes of cohort totals return to the CPU per dispatch. The CPU
+reference remains canonical, exact integer population and money totals stay on
+CPU, and normalized cohort parity is exposed under `ms6.cohorts`.
+
+The canonical cohort averages feed both employment-transition rates and the
+district social-field model. Agent-level stress, spending and wealth therefore
+affect district stress, business health and related feedback loops without
+requiring a full Dictionary scan in the field system.
 
 The normal headless test verifies the fallback path:
 
@@ -511,17 +523,55 @@ Run the spatial grid at 1,200, 10,000 and 100,000 agents:
 godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_spatial_scale_test.gd
 ```
 
+Verify the 24-cohort reduction at 100,000 agents:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone6_cohort_aggregate_test.gd
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_cohort_aggregate_test.gd
+```
+
 On the current development machine, eight live 4,096-agent updates reuse one
 device and one buffer allocation, perform only two full readbacks, and stay
 within about `0.00000006` of the CPU reference. The scale regression completes
 15 dispatches across all three population sizes in about half a second and
 downloads roughly 42% of the data required by full readback after every
 dispatch. The spatial scale test finds bounded physical neighbors for 100,000
-agents in roughly `0.3` seconds; the seven-day live test performs 28 verified
-spatial dispatches and routes more than 5,000 gossip attempts through physical
-proximity without changing the equal-seed canonical result. The next MS6 step
-is moving social-field and aggregate cohort reductions onto compute shaders;
-authoritative integer money and population counts remain CPU-side.
+agents in roughly `0.3` seconds; the seven-day live test performs 14 verified
+spatial dispatches and routes more than 2,700 gossip attempts through physical
+proximity without changing the equal-seed canonical result. The 100,000-agent
+cohort test stays within a normalized CPU/GPU error of about `0.00000033` while
+returning 480 bytes per dispatch. The next development focus is broader
+data-driven NPC behavior and interaction variety; authoritative integer money
+and population counts remain CPU-side.
+
+The concrete content roadmap is documented in
+[`docs/npc-diversity-plan.md`](docs/npc-diversity-plan.md).
+
+### Utility-based activities (D1 foundation)
+
+The first NPC-diversity slice replaces fixed free-time branches with a
+deterministic utility model. Work shifts and night-time home commitments remain
+hard constraints; inside each valid window an agent evaluates activity cost,
+stress recovery, wealth pressure, sociability, curiosity, conscientiousness,
+current activity level, district tension and a stable individual affinity.
+
+Sixteen reusable `ActivitySpec` resources are active: focused work, teamwork,
+work breaks, home care, rest, errands, cafe meals, walking, exercise, social
+meetings, community work, healthcare, craft projects, job search, friend visits
+and study. Each choice exposes its score and explanation, duration, place,
+participant requirement and systemic stress/activity/money effects. Accepted
+shared activities apply these effects through the existing Decision Engine and
+conserved transfer model.
+
+Run the full-day 1,200-agent diversity regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/d1_activity_utility_test.gd
+```
+
+The test requires all 16 activities and all eight district places to appear,
+checks equal-seed determinism and verifies that work/home obligations cannot be
+displaced by a higher free-time utility.
 
 ## Groq API
 

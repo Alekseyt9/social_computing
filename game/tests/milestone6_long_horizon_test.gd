@@ -27,10 +27,17 @@ func _init() -> void:
 			return
 	var metrics: Dictionary = gpu_population.get_ms6_metrics()
 	var backend: Dictionary = metrics.gpu_backend
+	var cohorts: Dictionary = metrics.cohorts
+	var cohort_backend: Dictionary = cohorts.backend
 	if int(metrics.update_count) != DAYS:
 		gpu_population.close_ms6_backend()
 		cpu_population.close_ms6_backend()
 		_fail("Expected one MS6 update per day")
+		return
+	if int(cohorts.update_count) != DAYS or int(cohorts.active_cohorts) <= 0:
+		gpu_population.close_ms6_backend()
+		cpu_population.close_ms6_backend()
+		_fail("Expected one cohort reduction per day")
 		return
 	if bool(backend.persistent_device):
 		if (
@@ -42,13 +49,24 @@ func _init() -> void:
 			cpu_population.close_ms6_backend()
 			_fail("Unexpected 30-day GPU metrics: %s" % JSON.stringify(metrics))
 			return
+	if bool(cohort_backend.persistent_device) and (
+		int(cohort_backend.device_initializations) != 1
+		or int(cohort_backend.buffer_reallocations) != 1
+		or int(cohort_backend.dispatch_count) != DAYS
+		or float(cohorts.max_error) > 0.00001
+	):
+		gpu_population.close_ms6_backend()
+		cpu_population.close_ms6_backend()
+		_fail("Unexpected 30-day cohort metrics: %s" % JSON.stringify(cohorts))
+		return
 	var elapsed_usec := Time.get_ticks_usec() - started_usec
 	print((
 		"MILESTONE6_LONG_HORIZON_OK days=%d agents=1200 status=%s dispatches=%d "
-		+ "full_readbacks=%d money_conserved=true deterministic=true elapsed_ms=%.2f"
+		+ "full_readbacks=%d cohort_dispatches=%d money_conserved=true deterministic=true elapsed_ms=%.2f"
 	) % [
 		DAYS, str(metrics.status), int(backend.dispatch_count),
-		int(backend.full_readbacks), float(elapsed_usec) / 1000.0,
+		int(backend.full_readbacks), int(cohort_backend.dispatch_count),
+		float(elapsed_usec) / 1000.0,
 	])
 	gpu_population.close_ms6_backend()
 	cpu_population.close_ms6_backend()

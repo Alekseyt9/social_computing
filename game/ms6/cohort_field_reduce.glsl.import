@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bkfestpabv3w"
+path="res://.godot/imported/cohort_field_reduce.glsl-1956060b932c74b71731c256aa6bd8fd.res"
+
+[deps]
+
+source_file="res://ms6/cohort_field_reduce.glsl"
+dest_files=["res://.godot/imported/cohort_field_reduce.glsl-1956060b932c74b71731c256aa6bd8fd.res"]
+
+[params]
+

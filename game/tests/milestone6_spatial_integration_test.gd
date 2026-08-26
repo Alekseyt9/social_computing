@@ -21,7 +21,7 @@ func _init() -> void:
 		_fail("Spatial GPU shadow changed canonical simulation state")
 		return
 	if (
-		int(spatial.update_count) != DAYS * 4 or int(spatial.neighbor_count) < 1000
+		int(spatial.update_count) != DAYS * 2 or int(spatial.neighbor_count) < 1000
 		or int(spatial.gossip_sources) <= 0 or int(spatial.mismatch_count) != 0
 		or not bool(gpu_snapshot.money_conserved)
 	):
@@ -30,7 +30,7 @@ func _init() -> void:
 		return
 	if bool(backend.persistent_device) and (
 		int(backend.device_initializations) != 1 or int(backend.buffer_reallocations) != 1
-		or int(backend.dispatch_count) != DAYS * 4
+		or int(backend.dispatch_count) != DAYS * 2
 	):
 		_close(gpu_population, cpu_population)
 		_fail("Live spatial GPU resources were not persistent: %s" % JSON.stringify(backend))

@@ -186,17 +186,27 @@ func export_feedback_buffer() -> PackedFloat32Array:
 
 
 func export_spatial_positions(at_tick: int) -> PackedFloat32Array:
-	var positions := PackedFloat32Array()
-	positions.resize(_count * 2)
+	var place_ids := PackedInt32Array()
+	place_ids.resize(_count)
 	for index in range(_count):
 		var workplace_id := int(_workplace_ids[index])
 		var work_place_id := 1 if workplace_id == 1 else 2
-		var place_id := LightScheduleScript.resolve_place(
+		place_ids[index] = LightScheduleScript.resolve_place(
 			CODE_TO_SCHEDULE[int(_schedule_codes[index])],
 			at_tick,
 			int(_home_place_ids[index]),
 			work_place_id
 		)
+	return export_spatial_positions_for_places(place_ids)
+
+
+func export_spatial_positions_for_places(place_ids: PackedInt32Array) -> PackedFloat32Array:
+	if place_ids.size() != _count:
+		return PackedFloat32Array()
+	var positions := PackedFloat32Array()
+	positions.resize(_count * 2)
+	for index in range(_count):
+		var place_id := int(place_ids[index])
 		var zone: Rect2 = SPATIAL_PLACE_ZONES.get(place_id, SPATIAL_PLACE_ZONES[2])
 		var agent_id := _first_id + index
 		var usable_width := maxf(1.0, zone.size.x - 24.0)
@@ -206,6 +216,17 @@ func export_spatial_positions(at_tick: int) -> PackedFloat32Array:
 		positions[index * 2] = zone.position.x + 12.0 + unit_x * usable_width
 		positions[index * 2 + 1] = zone.position.y + 12.0 + unit_y * usable_height
 	return positions
+
+
+func export_feedback_cohort_codes() -> PackedInt32Array:
+	var codes := PackedInt32Array()
+	codes.resize(_count)
+	for index in range(_count):
+		var workplace := clampi(int(_workplace_ids[index]), 0, 2)
+		var employment := 1 if int(_employment_codes[index]) == 1 else 0
+		var schedule := clampi(int(_schedule_codes[index]), 0, 3)
+		codes[index] = workplace * 8 + employment * 4 + schedule
+	return codes
 
 
 func feedback_dirty_ranges() -> Array[Dictionary]:

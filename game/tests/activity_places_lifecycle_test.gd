@@ -91,9 +91,19 @@ func _test_place_and_active_lifecycle() -> void:
 		_fail("Cafe interior contains no schedule-selected visitors")
 		return
 	var agent_id := -1
+	var destination_place_id := -1
+	var destination_activity := ""
 	for candidate_id: int in crowd.get_visible_citizen_ids():
-		if str(scene.world.get_light_agent_view(candidate_id).schedule_kind) == "DAY_WORK":
+		var future: Dictionary = scene.world.get_light_agent_schedule_state(
+			candidate_id, int(scene.world.tick) + 96
+		)
+		if (
+			str(scene.world.get_light_agent_view(candidate_id).schedule_kind) == "DAY_WORK"
+			and int(future.place_id) in [5, 6, 7, 8]
+		):
 			agent_id = candidate_id
+			destination_place_id = int(future.place_id)
+			destination_activity = str(future.activity)
 			break
 	if agent_id == -1:
 		_fail("Cafe interior has no day worker for lifecycle test")
@@ -111,14 +121,14 @@ func _test_place_and_active_lifecycle() -> void:
 		_fail("Persistent person was not materialized as ActiveNPC inside cafe")
 		return
 	var stable_name: String = scene.world.get_person_name(agent_id)
-	scene.world.advance(96) # Day worker leaves cafe for shopping quarter.
+	scene.world.advance(96) # Utility model selects the worker's next valid activity.
 	scene._update_adaptive_focus(true)
 	await process_frame
 	if scene.get_active_adaptive_npc_count() != 0 or not scene.world.has_person(agent_id):
 		_fail("Offscreen ActiveNPC did not dematerialize while retaining identity")
 		return
 	scene._exit_place()
-	scene._enter_place(5)
+	scene._enter_place(destination_place_id)
 	await process_frame
 	if scene.get_active_adaptive_npc_count() != 1 or (
 		scene.world.get_person_name(agent_id) != stable_name
@@ -128,10 +138,12 @@ func _test_place_and_active_lifecycle() -> void:
 	if scene.world.get_light_agent_tier(agent_id) != "PERSISTENT_NPC":
 		_fail("Active lifecycle changed the canonical adaptive tier")
 		return
-	if scene.world.get_current_place_id(scene.world.player_id) != 5:
-		_fail("Shopping interior entry was not recorded in canonical world state")
+	if scene.world.get_current_place_id(scene.world.player_id) != destination_place_id:
+		_fail("Computed destination entry was not recorded in canonical world state")
 		return
-	print("ACTIVITY_PLACES_OK context=ERRANDS money_conserved=true interiors=5 active_to_persistent_to_active=true person=%d" % agent_id)
+	print("ACTIVITY_PLACES_OK context=%s destination=%d money_conserved=true interiors=5 active_to_persistent_to_active=true person=%d" % [
+		destination_activity, destination_place_id, agent_id,
+	])
 	scene.queue_free()
 	quit(0)
 
