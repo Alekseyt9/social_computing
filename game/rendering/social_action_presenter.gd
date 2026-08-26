@@ -14,6 +14,8 @@ static func button_label(action: Dictionary) -> String:
 			return "Поговорить по-дружески"
 		"OfferHelp":
 			return "Предложить помощь"
+		"JoinActivity":
+			return _activity_button(str(context.get("activity", "")))
 		"AskAbout":
 			return "Спросить: %s" % str(context.get("topic", "тема"))
 		"AskLocalNews":
@@ -52,6 +54,8 @@ static func player_line(action_type: String, context: Dictionary) -> String:
 			return _join(["Как", "у тебя", "сегодня", "дела"], "?")
 		"OfferHelp":
 			return _join(["Если", "тебе", "нужна", "помощь", "я", "могу", "помочь"], ".")
+		"JoinActivity":
+			return _join(["Можно", "присоединиться", "к", str(context.get("activity_label", "этому занятию"))], "?")
 		"AskAbout":
 			return _join(["Ты", "можешь", "рассказать", "мне", "про", topic], "?")
 		"AskLocalNews":
@@ -83,3 +87,15 @@ static func _join(tokens: Array, punctuation: String) -> String:
 		if not word.is_empty():
 			words.append(word)
 	return " ".join(words) + punctuation
+
+
+static func _activity_button(activity: String) -> String:
+	return {
+		"WORK": "Поговорить о работе",
+		"ERRANDS": "Помочь с текущими делами",
+		"LEISURE": "Присоединиться к прогулке",
+		"JOB_SEARCH": "Вместе посмотреть вакансии",
+		"SOCIAL": "Посидеть вместе",
+		"COMMUNITY": "Присоединиться к общему делу",
+		"HOME": "Поговорить о домашних делах",
+	}.get(activity, "Присоединиться к занятию")

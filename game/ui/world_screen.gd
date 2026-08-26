@@ -9,8 +9,15 @@ const SocialRendererScript := preload("res://rendering/social_renderer.gd")
 const SocialActionPresenterScript := preload("res://rendering/social_action_presenter.gd")
 const SocialMapPanelScript := preload("res://ui/social_map_panel.gd")
 const AmbientCrowdLayerScript := preload("res://world/ambient_crowd_layer.gd")
+const PlaceInteriorScript := preload("res://world/place_interior.gd")
 
 const INTERACTION_DISTANCE := 92.0
+const INTERIOR_ORIGIN := Vector2(2600, 0)
+const INTERACTIVE_PLACES := {
+	2: {"name": "Corner Cafe", "entrance": Vector2(345, 418), "color": Color("e6a75e")},
+	5: {"name": "Торговый квартал", "entrance": Vector2(1370, 1025), "color": Color("79c39a")},
+	6: {"name": "Общественный центр", "entrance": Vector2(2060, 420), "color": Color("e2c36f")},
+}
 const NPC_DATA := [
 	{"id": 2, "position": Vector2(745, 615), "zone": Rect2(725, 555, 95, 105), "color": Color("db7f8e")},
 	{"id": 8, "position": Vector2(560, 500), "zone": Rect2(545, 455, 125, 225), "color": Color("e5ad62")},
@@ -46,9 +53,15 @@ var _pending_act: Dictionary = {}
 var _pending_fallback := ""
 var _pending_player_line := ""
 var _near_aurora_entrance := false
+var _nearby_place: Dictionary = {}
+var _near_interior_exit := false
+var _current_interior: Dictionary = {}
+var _outdoor_return_position := Vector2.ZERO
 var _renderer_debug: Dictionary = {}
 var _last_adaptive_focus_tick: int = -1
 var _ambient_crowd: Node2D
+var _world_map: Node2D
+var _interior_map: Node2D
 
 var _prompt_panel: PanelContainer
 var _prompt_label: Label
@@ -101,7 +114,14 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_M:
+		if event.keycode == KEY_T and not (
+			_dialogue_panel.visible or _social_map_overlay.visible or _debug_overlay.visible
+		):
+			world.advance(12) # One visible hour; useful for observing daily routines.
+			_update_adaptive_focus(true)
+			_update_hud()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_M:
 			_toggle_social_map()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_F3:
@@ -116,6 +136,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_activate_nearby_light_citizen()
 			elif _near_aurora_entrance:
 				_open_aurora_entrance()
+			elif not _nearby_place.is_empty():
+				_enter_place(int(_nearby_place.id))
+			elif _near_interior_exit:
+				_exit_place()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_ESCAPE:
 			if _social_map_overlay.visible:
@@ -124,13 +148,20 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_debug_inspector()
 			elif _dialogue_panel.visible:
 				_close_dialogue()
+			elif not _current_interior.is_empty():
+				_exit_place()
 			get_viewport().set_input_as_handled()
 
 
 func _build_map() -> void:
-	var map := WorldMapScript.new()
-	map.name = "WorldMap"
-	add_child(map)
+	_world_map = WorldMapScript.new()
+	_world_map.name = "WorldMap"
+	add_child(_world_map)
+	_interior_map = PlaceInteriorScript.new()
+	_interior_map.name = "PlaceInterior"
+	_interior_map.position = INTERIOR_ORIGIN
+	_interior_map.visible = false
+	add_child(_interior_map)
 	_ambient_crowd = AmbientCrowdLayerScript.new()
 	_ambient_crowd.name = "AmbientCrowd"
 	_ambient_crowd.setup(world)
@@ -164,13 +195,22 @@ func _update_adaptive_focus(force: bool) -> void:
 	world.update_adaptive_focus(_player_place_id(), [], 60)
 	if _ambient_crowd != null:
 		_ambient_crowd.sync_from_simulation()
+	_sync_active_adaptive_npcs()
 
 
 func _player_place_id() -> int:
+	if not _current_interior.is_empty():
+		return int(_current_interior.id)
 	var position_in_world := player.global_position
-	if position_in_world.y >= 735.0 and position_in_world.x <= 650.0:
-		return 3 # Player Apartment / residential block
-	if position_in_world.x >= 1070.0:
+	if position_in_world.x >= 1780.0 and position_in_world.y < 780.0:
+		return 6 # Community center and east square
+	if position_in_world.y >= 1000.0 and position_in_world.x >= 1080.0:
+		return 5 # Shopping and workshop quarter
+	if position_in_world.x <= 540.0 and position_in_world.y >= 430.0 and position_in_world.y < 760.0:
+		return 4 # Park
+	if position_in_world.y >= 760.0:
+		return 3 # Residential blocks
+	if position_in_world.x >= 1070.0 and position_in_world.x < 1780.0:
 		return 1 # Aurora side of the district
 	return 2 # Cafe, park and public square
 
@@ -225,7 +265,7 @@ func _build_hud() -> void:
 	clock_panel.add_child(_clock_label)
 
 	var controls := Label.new()
-	controls.text = "WASD — движение   E — диалог   M — связи   F3 — debug"
+	controls.text = "WASD — движение   E — диалог   T — +1 час   M — связи   F3 — debug"
 	controls.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	controls.position = Vector2(-455, 94)
 	controls.size = Vector2(430, 30)
@@ -474,17 +514,42 @@ func _update_nearby_npc() -> void:
 			_nearby_light_citizen = ambient_candidate
 			closest = null
 	_nearby_npc = closest
-	_near_aurora_entrance = player.global_position.distance_to(Vector2(1385, 425)) < 88.0
+	_near_aurora_entrance = _current_interior.is_empty() and (
+		player.global_position.distance_to(Vector2(1385, 425)) < 88.0
+	)
+	_nearby_place = {}
+	_near_interior_exit = false
+	if _current_interior.is_empty():
+		var nearest_place_distance := INTERACTION_DISTANCE
+		for place_id: int in INTERACTIVE_PLACES:
+			var place: Dictionary = INTERACTIVE_PLACES[place_id]
+			var place_distance := player.global_position.distance_to(place.entrance)
+			if place_distance < nearest_place_distance:
+				nearest_place_distance = place_distance
+				_nearby_place = place.duplicate(true)
+				_nearby_place["id"] = place_id
+	else:
+		_near_interior_exit = player.global_position.distance_to(
+			_interior_map.get_exit_position()
+		) < INTERACTION_DISTANCE
 	_prompt_panel.visible = (
-		closest != null or not _nearby_light_citizen.is_empty() or _near_aurora_entrance
+		closest != null or not _nearby_light_citizen.is_empty()
+		or _near_aurora_entrance or not _nearby_place.is_empty() or _near_interior_exit
 	)
 	if closest != null:
 		var identity: Dictionary = world.get_visible_identity(world.player_id, closest.person_id)
 		_prompt_label.text = "[ E ]  Поговорить  ·  %s" % identity.name
 	elif not _nearby_light_citizen.is_empty():
+		var activity := str(_nearby_light_citizen.get("activity_label", ""))
 		_prompt_label.text = "[ E ]  Поговорить  ·  Житель района"
+		if not activity.is_empty():
+			_prompt_label.text += " · %s" % activity
 	elif _near_aurora_entrance:
 		_prompt_label.text = "[ E ]  Войти в Aurora"
+	elif not _nearby_place.is_empty():
+		_prompt_label.text = "[ E ]  Войти · %s" % str(_nearby_place.name)
+	elif _near_interior_exit:
+		_prompt_label.text = "[ E ]  Выйти на улицу"
 
 
 func _activate_nearby_light_citizen() -> void:
@@ -528,14 +593,31 @@ func _open_dialogue(npc: CharacterBody2D) -> void:
 	player.velocity = Vector2.ZERO
 	_prompt_panel.visible = false
 	_dialogue_panel.visible = true
+	var background_history: Array[Dictionary] = []
+	if world.is_person_known_to(world.player_id, npc.person_id):
+		background_history = world.get_persistent_background_history(
+			npc.person_id, world.player_id
+		)
 	var identity: Dictionary = world.get_visible_identity(world.player_id, npc.person_id)
 	_speaker_label.text = identity.name
 	_role_label.text = identity.role if identity.known else "Вы ещё не знакомы"
+	var activity: Dictionary = world.get_person_activity_view(npc.person_id)
+	if identity.known and not activity.is_empty():
+		_role_label.text += " · %s" % str(activity.activity_label)
 	_status_label.text = "Решения принимает симуляция · текст: Groq или локальный шаблон"
 	_status_label.text += " · %s" % _relationship_signal(npc.person_id)
 	_clear_actions()
 	if identity.known:
-		_conversation_label.text = "%s смотрит на вас и ждёт, что вы скажете." % identity.name
+		if background_history.is_empty():
+			_conversation_label.text = "%s смотрит на вас и ждёт, что вы скажете." % identity.name
+		else:
+			var history_lines := PackedStringArray()
+			for event: Dictionary in background_history:
+				history_lines.append("• %s" % str(event.summary))
+			_conversation_label.text = "С прошлой встречи:\n%s\n\n%s ждёт, что вы скажете." % [
+				"\n".join(history_lines), identity.name,
+			]
+			_update_news_feed()
 	else:
 		_conversation_label.text = "Незнакомец останавливается рядом. Можно представиться и начать знакомство."
 	_refresh_dialogue_actions()
@@ -704,10 +786,12 @@ func _set_action_buttons_disabled(disabled: bool) -> void:
 
 
 func _update_hud() -> void:
-	var minutes: int = (int(world.tick) * 5) % (24 * 60)
-	var hour: int = 10 + int(minutes / 60)
-	var minute: int = minutes % 60
-	_clock_label.text = "День 1  ·  %02d:%02d" % [hour, minute]
+	var absolute_clock_ticks := int(world.tick) + 120
+	var day := 1 + int(absolute_clock_ticks / 288)
+	var minute_of_day := (absolute_clock_ticks % 288) * 5
+	var hour := int(minute_of_day / 60)
+	var minute := minute_of_day % 60
+	_clock_label.text = "День %d  ·  %02d:%02d" % [day, hour, minute]
 	var goal: Dictionary = world.get_goal_state(world.player_id)
 	_objective_label.text = "%s\n%s" % [goal.title, goal.hint]
 	var tasks: Array[Dictionary] = world.get_active_tasks_for(world.player_id)
@@ -752,9 +836,9 @@ func _update_news_feed() -> void:
 
 
 func _tick_label(event_tick: int) -> String:
-	var total_minutes := event_tick * 5
-	var day := 1 + int(total_minutes / (24 * 60))
-	var minute_of_day := (10 * 60 + total_minutes) % (24 * 60)
+	var absolute_ticks := event_tick + 120
+	var day := 1 + int(absolute_ticks / 288)
+	var minute_of_day := (absolute_ticks % 288) * 5
 	return "Д%d %02d:%02d" % [day, int(minute_of_day / 60), minute_of_day % 60]
 
 
@@ -783,6 +867,7 @@ func _show_effect_toast(effects: Array) -> void:
 			"INTRODUCTION_CREATED": message = "Открыт новый контакт: %s" % str(effect.get("person_name", "человек"))
 			"ACCESS_GRANTED": message = "Получен новый способ доступа в Aurora"
 			"IDENTITY_EXCHANGED": message = "Новый человек добавлен в социальную карту"
+			"ACTIVITY_SHARED": message = "Вы провели время вместе · занятие повлияло на отношения"
 		if not message.is_empty():
 			_toast_label.text = message
 			_toast_remaining = 3.2

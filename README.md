@@ -273,6 +273,23 @@ Run the headless identity/conservation regression:
 godot_console --headless --path ./game --script res://tests/adaptive_citizen_interaction_test.gd
 ```
 
+### Expanded district and daily routines
+
+The playable map is now `2400×1450` and includes a second residential block,
+shopping/workshop quarter, clinic, community center and east public square in
+addition to Aurora, the cafe, park and original housing. Lightweight residents
+follow calculated day-work, evening-shift, flexible and unemployed routines.
+Their current activity can be work, home life, errands, leisure, social time or
+job search. At a schedule boundary visible residents follow street waypoints to
+their next destination instead of teleporting. Press `T` in the running game to
+advance one simulated hour and quickly observe a full daily cycle.
+
+Run the map/schedule/commute regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/schedule_and_district_test.gd
+```
+
 ### District Social Fields (MS4)
 
 The district now maintains normalized continuous fields for wealth, fear, crime,
@@ -293,6 +310,21 @@ causal direction: unemployment raises stress, lowers spending and business
 health, and feeds back into additional unemployment. It also checks normalized
 bounds, determinism, structured field events, NPC risk influence, and
 agent-to-field contributions.
+
+### Lazy histories (MS5)
+
+An adaptive PersistentNPC stores sparse state anchors rather than a minute-by-
+minute biography. When a known person returns after days or weeks offscreen,
+the history system compares canonical employment, workplace, money and schedule
+state, reconstructs only the necessary background events, and shows the result
+at the next conversation. Once disclosed, each reconstructed event becomes a
+Fact/Event in the canonical world and is never generated a second time.
+
+Run the two-week deterministic reconstruction test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone5_lazy_history_test.gd
+```
 
 ## Groq API
 

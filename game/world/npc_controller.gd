@@ -51,6 +51,13 @@ func set_known_name(value: String) -> void:
 		_name_label.text = value
 
 
+func set_movement_zone(zone: Rect2) -> void:
+	movement_zone = zone
+	if not movement_zone.grow(20.0).has_point(global_position):
+		global_position = movement_zone.get_center()
+	_pick_target()
+
+
 func _physics_process(delta: float) -> void:
 	if movement_paused:
 		velocity = velocity.move_toward(Vector2.ZERO, 480.0 * delta)

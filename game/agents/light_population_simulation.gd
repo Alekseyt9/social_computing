@@ -29,6 +29,7 @@ var _groups: Dictionary = {}
 var _job_change_count: int = 0
 var _gossip_transfer_count: int = 0
 var _money_transfer_count: int = 0
+var _contextual_activity_count: int = 0
 var _initial_total_money_cents: int = 0
 var _pending_events: Array[Dictionary] = []
 var _detailed_agent_steps: int = 0
@@ -61,7 +62,7 @@ func advance(ticks_to_advance: int) -> void:
 
 func snapshot() -> Dictionary:
 	var employed := 0
-	var location_counts: Dictionary = {1: 0, 2: 0, 3: 0}
+	var location_counts: Dictionary = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
 	var contact_edges := 0
 	var rumor_edges := 0
 	for agent_id: int in get_agent_ids():
@@ -86,6 +87,7 @@ func snapshot() -> Dictionary:
 		"gossip_transfers": _gossip_transfer_count,
 		"job_changes": _job_change_count,
 		"money_transfers": _money_transfer_count,
+		"contextual_activities": _contextual_activity_count,
 		"total_money_cents": total_money,
 		"money_conserved": total_money == _initial_total_money_cents,
 		"detailed_agent_steps": _detailed_agent_steps,
@@ -105,10 +107,26 @@ func get_agent_view(agent_id: int) -> Dictionary:
 		return agent
 	var workplace_id := int(agent.workplace_organization_id)
 	var work_place_id := 1 if workplace_id == 1 else 2
-	agent["current_place_id"] = LightScheduleScript.resolve_place(
+	var schedule_state: Dictionary = LightScheduleScript.resolve_state(
 		str(agent.schedule_kind), tick, int(agent.home_place_id), work_place_id
 	)
+	agent["current_place_id"] = int(schedule_state.place_id)
+	agent["current_activity"] = str(schedule_state.activity)
+	agent["activity_label"] = str(schedule_state.activity_label)
 	return agent
+
+
+func get_agent_schedule_state(agent_id: int, at_tick: int) -> Dictionary:
+	var agent: Dictionary = _store.get_agent(agent_id)
+	if agent.is_empty():
+		return {}
+	var workplace_id := int(agent.workplace_organization_id)
+	var work_place_id := 1 if workplace_id == 1 else 2
+	var state: Dictionary = LightScheduleScript.resolve_state(
+		str(agent.schedule_kind), at_tick, int(agent.home_place_id), work_place_id
+	)
+	state["tick"] = at_tick
+	return state
 
 
 func get_agent_ids() -> Array[int]:
@@ -143,6 +161,45 @@ func set_detail_tiers(light_agent_ids: Array, persistent_agent_ids: Array) -> vo
 
 func set_social_field_influence(fields: Dictionary) -> void:
 	_social_field_influence = fields.duplicate(true)
+
+
+func resolve_contextual_activity(agent_id: int, activity: String) -> Dictionary:
+	var agent: Dictionary = get_agent_view(agent_id)
+	if agent.is_empty():
+		return {"ok": false, "error": "UNKNOWN_LIGHT_AGENT"}
+	if str(agent.current_activity) != activity:
+		return {
+			"ok": false,
+			"error": "ACTIVITY_CHANGED",
+			"current_activity": str(agent.current_activity),
+		}
+	var money_delta := 0
+	var transfer_amount := 0
+	if activity in ["ERRANDS", "SOCIAL"] and not agent.local_contact_ids.is_empty():
+		var payer: Dictionary = _store.get_agent(agent_id)
+		var receiver_id := int(payer.local_contact_ids[
+			posmod(agent_id + tick + activity.hash(), payer.local_contact_ids.size())
+		])
+		var receiver: Dictionary = _store.get_agent(receiver_id)
+		var desired_amount := 75 + posmod(agent_id * 31 + tick * 17, 176)
+		transfer_amount = mini(desired_amount, maxi(0, int(payer.money_cents)))
+		if transfer_amount > 0:
+			payer["money_cents"] = int(payer.money_cents) - transfer_amount
+			receiver["money_cents"] = int(receiver.money_cents) + transfer_amount
+			_store.update_agent(payer)
+			_store.update_agent(receiver)
+			_money_transfer_count += 1
+			money_delta = -transfer_amount
+	_contextual_activity_count += 1
+	return {
+		"ok": true,
+		"agent_id": agent_id,
+		"activity": activity,
+		"activity_label": str(agent.activity_label),
+		"place_id": int(agent.current_place_id),
+		"money_delta_cents": money_delta,
+		"transfer_amount_cents": transfer_amount,
+	}
 
 
 func validate() -> Array[String]:

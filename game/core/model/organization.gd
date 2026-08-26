@@ -17,3 +17,6 @@ func add_member(person_id: int) -> void:
 	if not member_ids.has(person_id):
 		member_ids.append(person_id)
 
+
+func remove_member(person_id: int) -> void:
+	member_ids.erase(person_id)

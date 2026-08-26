@@ -17,6 +17,7 @@ const GoalSolverScript := preload("res://social/goal_solver.gd")
 const LightPopulationSimulationScript := preload("res://agents/light_population_simulation.gd")
 const AdaptivePopulationSystemScript := preload("res://adaptive/adaptive_population_system.gd")
 const DistrictSocialFieldSystemScript := preload("res://social_fields/district_social_field_system.gd")
+const LazyHistorySystemScript := preload("res://history/lazy_history_system.gd")
 const CommunicativeActScript := preload("res://rendering/communicative_act.gd")
 const TemplateRendererScript := preload("res://rendering/template_social_renderer.gd")
 
@@ -61,6 +62,7 @@ var _planner_meetable_ids: Array[int] = [2, 5, 8]
 var _light_population: RefCounted
 var _adaptive_population: RefCounted
 var _district_fields: RefCounted
+var _lazy_history: RefCounted
 var _activated_adaptive_person_ids: Dictionary = {}
 
 const RESIDENT_FIRST_NAMES := [
@@ -85,6 +87,7 @@ func _init(initial_seed: int) -> void:
 	)
 	_district_fields = DistrictSocialFieldSystemScript.new(_light_population.snapshot())
 	_light_population.set_social_field_influence(_district_fields.snapshot())
+	_lazy_history = LazyHistorySystemScript.new()
 
 
 func advance(ticks: int) -> Dictionary:
@@ -195,6 +198,16 @@ func get_light_agent_view(agent_id: int) -> Dictionary:
 	return _light_population.get_agent_view(agent_id)
 
 
+func get_light_agent_schedule_state(agent_id: int, at_tick: int) -> Dictionary:
+	return _light_population.get_agent_schedule_state(agent_id, at_tick)
+
+
+func get_person_activity_view(person_id: int) -> Dictionary:
+	if not _activated_adaptive_person_ids.has(person_id):
+		return {}
+	return _light_population.get_agent_schedule_state(person_id, tick)
+
+
 func validate_light_population() -> Array[String]:
 	return _light_population.validate()
 
@@ -261,6 +274,7 @@ func activate_light_agent_as_person(
 		# through the normal disclosure/action rules.
 		for fact_id: int in _district_opportunity_fact_ids:
 			_add_knowledge(agent_id, fact_id, 0.85, agent_id, 0.70)
+		_lazy_history.register_person(agent_id, tick, agent)
 	return {
 		"ok": true,
 		"person_id": agent_id,
@@ -277,6 +291,56 @@ func get_activated_adaptive_person_ids() -> Array[int]:
 		result.append(person_id)
 	result.sort()
 	return result
+
+
+func get_persistent_background_history(
+	person_id: int, observer_id: int
+) -> Array[Dictionary]:
+	if not _activated_adaptive_person_ids.has(person_id):
+		return []
+	if not is_person_known_to(observer_id, person_id):
+		return [] # Unknown histories cannot leak identity or offscreen state.
+	var current_state: Dictionary = _light_population.get_agent_view(person_id)
+	if current_state.is_empty():
+		return []
+	var reconstructed: Array[Dictionary] = _lazy_history.materialize_known_history(
+		person_id, tick, current_state
+	)
+	if reconstructed.is_empty():
+		return []
+	_sync_activated_person_employment(person_id, current_state, observer_id)
+	var result: Array[Dictionary] = []
+	for history_event: Dictionary in reconstructed:
+		var summary := _background_history_summary(history_event)
+		var payload := history_event.duplicate(true)
+		payload["summary"] = summary
+		var fact_id := _add_fact(
+			"person", person_id, "background_event", payload,
+			int(history_event.tick), 0.55, 0.15
+		)
+		_add_knowledge(person_id, fact_id, 1.0, person_id, 0.10)
+		_add_knowledge(observer_id, fact_id, 0.90, person_id, 0.10)
+		_lazy_history.attach_canonical_fact(
+			person_id, int(history_event.history_event_id), fact_id
+		)
+		payload["canonical_fact_id"] = fact_id
+		result.append(payload)
+		_events.append(SocialEventScript.new(
+			_next_event_id, "background_history_reconstructed",
+			[person_id] as Array[int], [observer_id] as Array[int],
+			int(current_state.current_place_id), int(history_event.tick),
+			0.55, 0.25, 0.15, [fact_id] as Array[int]
+		))
+		_next_event_id += 1
+	return result
+
+
+func get_persistent_history_profile(person_id: int) -> Dictionary:
+	return _lazy_history.get_profile(person_id)
+
+
+func validate_lazy_histories() -> Array[String]:
+	return _lazy_history.validate()
 
 
 func release_adaptive_persistent(
@@ -513,6 +577,7 @@ func get_debug_inspector(person_id: int, observer_id: int) -> Dictionary:
 		"known_facts": known_fact_summaries,
 		"last_decision": _last_decision_by_person.get(person_id, {}).duplicate(true),
 		"recent_events": related_events,
+		"lazy_history": get_persistent_history_profile(person_id),
 	}
 
 
@@ -568,6 +633,26 @@ func _player_news_item(observer_id: int, event: RefCounted) -> Dictionary:
 				if person_knows_fact(observer_id, fact_id):
 					return _news_item(event.timestamp, "AURORA", "В Aurora готовится мероприятие", "Доступ ограничен — потребуется социальный путь.")
 			return {}
+		"background_history_reconstructed":
+			if not involves_observer or event.affected_fact_ids.is_empty():
+				return {}
+			var fact_id := int(event.affected_fact_ids[0])
+			if not person_knows_fact(observer_id, fact_id):
+				return {}
+			var payload: Dictionary = _facts[fact_id].object_value
+			return _news_item(event.timestamp, "HISTORY", "Что изменилось", str(payload.summary))
+		"contextual_activity_shared":
+			if not involves_observer:
+				return {}
+			var person_id := -1
+			for candidate_id: int in event.actor_ids:
+				if candidate_id != observer_id:
+					person_id = candidate_id
+					break
+			return _news_item(
+				event.timestamp, "ACTIVITY", "Совместное занятие",
+				"Время проведено вместе с %s." % get_person_name(person_id)
+			)
 		_:
 			return {}
 
@@ -790,6 +875,17 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 					"topic": str(task.topic),
 				},
 			})
+	var activity: Dictionary = get_person_activity_view(target_id)
+	if not activity.is_empty():
+		actions.append({
+			"type": "JoinActivity",
+			"context": {
+				"topic": str(activity.activity_label),
+				"activity": str(activity.activity),
+				"activity_label": str(activity.activity_label),
+				"place_id": int(activity.place_id),
+			},
+		})
 
 	actions.append({"type": "BuildRapport", "context": {"topic": "повседневные дела"}})
 	if not _has_active_task_from(actor_id, target_id):
@@ -937,12 +1033,13 @@ func perform_social_action(
 	if action_type == "IntroduceSelf":
 		return introduce_people(actor_id, target_id)
 	if action_type not in [
-		"BuildRapport", "OfferHelp", "AskAbout", "AskLocalNews", "AskFavor",
+		"BuildRapport", "OfferHelp", "JoinActivity", "AskAbout", "AskLocalNews", "AskFavor",
 		"AskIntroduction", "AskInvitation", "RequestAccess"
 	] and action_type not in TASK_OPERATORS:
 		return {"ok": false, "error": "UNKNOWN_ACTION"}
 	if not _people.has(actor_id) or not _people.has(target_id):
 		return {"ok": false, "error": "UNKNOWN_PERSON"}
+	context = context.duplicate(true)
 	var actor_target_fact_id := get_relationship_fact_id(actor_id, target_id)
 	if actor_target_fact_id == -1 or not person_knows_fact(actor_id, actor_target_fact_id):
 		return {"ok": false, "error": "ACTOR_DOES_NOT_KNOW_TARGET"}
@@ -958,6 +1055,16 @@ func perform_social_action(
 			return {"ok": false, "error": "TARGET_DOES_NOT_KNOW_SUBJECT"}
 		if not person_knows_fact(actor_id, target_subject_fact_id):
 			return {"ok": false, "error": "INTRODUCTION_SUBJECT_NOT_DISCOVERED"}
+	if action_type == "JoinActivity":
+		var current_activity: Dictionary = get_person_activity_view(target_id)
+		if current_activity.is_empty():
+			return {"ok": false, "error": "TARGET_HAS_NO_CONTEXTUAL_ACTIVITY"}
+		if str(context.get("activity", "")) != str(current_activity.activity) or (
+			int(context.get("place_id", -1)) != int(current_activity.place_id)
+		):
+			return {"ok": false, "error": "ACTIVITY_CHANGED"}
+		context["activity_label"] = str(current_activity.activity_label)
+		context["topic"] = str(current_activity.activity_label)
 
 	if action_type == "AskInvitation" and not _event_organizer_fact_ids.has(target_id):
 		return {"ok": false, "error": "TARGET_CANNOT_INVITE"}
@@ -1143,6 +1250,31 @@ func _apply_social_effects(
 				"counterpart_name": get_person_name(int(task.counterpart_id)),
 				"need_type": str(task.need_type),
 			})
+	elif action_type == "JoinActivity":
+		var activity_result: Dictionary = _light_population.resolve_contextual_activity(
+			target_id, str(context.get("activity", ""))
+		)
+		if bool(activity_result.get("ok", false)):
+			target_to_actor.trust = clampf(target_to_actor.trust + 0.06, 0.0, 1.0)
+			target_to_actor.familiarity = clampf(target_to_actor.familiarity + 0.08, 0.0, 1.0)
+			actor_to_target.familiarity = clampf(actor_to_target.familiarity + 0.06, 0.0, 1.0)
+			var activity_need := _activity_need_type(str(activity_result.activity))
+			_reduce_need(target_id, activity_need, 0.10)
+			effects.append({
+				"type": "ACTIVITY_SHARED",
+				"activity": str(activity_result.activity),
+				"activity_label": str(activity_result.activity_label),
+				"place_id": int(activity_result.place_id),
+				"money_delta_cents": int(activity_result.money_delta_cents),
+				"need_type": activity_need,
+			})
+			_events.append(SocialEventScript.new(
+				_next_event_id, "contextual_activity_shared",
+				[actor_id, target_id] as Array[int], [] as Array[int],
+				int(activity_result.place_id), tick, 0.45, 0.30, 0.05,
+				[] as Array[int]
+			))
+			_next_event_id += 1
 	elif action_type == "AskIntroduction":
 		var subject_id := int(context.subject_person_id)
 		if not has_relationship(actor_id, subject_id):
@@ -1343,6 +1475,18 @@ func _reduce_need(person_id: int, need_type: String, amount: float) -> void:
 	profile["scores"] = scores
 	profile["dominant_type"] = _highest_scored_key(scores)
 	_needs_by_person[person_id] = profile
+
+
+func _activity_need_type(activity: String) -> String:
+	return {
+		"WORK": "REPUTATION",
+		"JOB_SEARCH": "RESOURCES",
+		"ERRANDS": "RESOURCES",
+		"LEISURE": "SUPPORT",
+		"SOCIAL": "SUPPORT",
+		"COMMUNITY": "REPUTATION",
+		"HOME": "SECURITY",
+	}.get(activity, "SUPPORT")
 
 
 func _derive_need_profile(person: RefCounted) -> Dictionary:
@@ -1651,6 +1795,67 @@ func _stable_resident_value(agent_id: int, salt: int) -> int:
 	return (
 		agent_id * _LCG_MULTIPLIER + salt * 97_531 + seed * 65_537
 	) & _LCG_MASK
+
+
+func _sync_activated_person_employment(
+	person_id: int, agent: Dictionary, observer_id: int
+) -> void:
+	var person: RefCounted = _people.get(person_id)
+	if person == null:
+		return
+	var previous_workplace := int(person.workplace_organization_id)
+	var current_workplace := int(agent.workplace_organization_id)
+	person.role = _resident_role(agent)
+	if previous_workplace == current_workplace:
+		return
+	if _organizations.has(previous_workplace):
+		_organizations[previous_workplace].remove_member(person_id)
+	var old_fact_id := int(_workplace_fact_ids.get(person_id, -1))
+	if old_fact_id != -1 and _facts.has(old_fact_id):
+		_facts[old_fact_id].truth_status = "false"
+	person.workplace_organization_id = current_workplace
+	_workplace_fact_ids.erase(person_id)
+	if current_workplace == 0 or not _organizations.has(current_workplace):
+		return
+	_organizations[current_workplace].add_member(person_id)
+	var workplace_fact_id := _add_fact(
+		"person", person_id, "works_for", current_workplace, tick, 0.65, 0.10
+	)
+	_workplace_fact_ids[person_id] = workplace_fact_id
+	_add_knowledge(person_id, workplace_fact_id, 1.0, person_id, 0.05)
+	_add_knowledge(observer_id, workplace_fact_id, 0.90, person_id, 0.10)
+
+
+func _background_history_summary(history_event: Dictionary) -> String:
+	var person_name := get_person_name(int(history_event.person_id))
+	var details: Dictionary = history_event.details
+	match str(history_event.type):
+		"JOB_STARTED":
+			return "%s: новая работа — %s." % [
+				person_name, _organization_name(int(details.to_workplace)),
+			]
+		"JOB_LOST":
+			return "%s: прежняя работа закончилась, начался поиск нового места." % person_name
+		"JOB_CHANGED":
+			return "%s: смена работы — %s → %s." % [
+				person_name,
+				_organization_name(int(details.from_workplace)),
+				_organization_name(int(details.to_workplace)),
+			]
+		"FINANCES_IMPROVED":
+			return "%s: финансовое положение за это время улучшилось." % person_name
+		"FINANCIAL_PRESSURE":
+			return "%s: за это время усилилось денежное давление." % person_name
+		_:
+			return "%s: обычная жизнь по своему графику (%d дн.)." % [
+				person_name, int(details.get("days", 0)),
+			]
+
+
+func _organization_name(organization_id: int) -> String:
+	if _organizations.has(organization_id):
+		return str(_organizations[organization_id].display_name)
+	return "без постоянного места работы"
 
 
 func _add_place(place_id: int, place_name: String, place_kind: String) -> void:

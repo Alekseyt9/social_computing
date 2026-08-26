@@ -1,12 +1,16 @@
 class_name WorldMap
 extends Node2D
 
-const WORLD_SIZE := Vector2(1760.0, 1080.0)
+const WORLD_SIZE := Vector2(2400.0, 1450.0)
 const BUILDINGS := [
 	{"rect": Rect2(95, 75, 500, 315), "name": "CORNER CAFE", "accent": Color("e6a75e")},
 	{"rect": Rect2(1125, 70, 520, 330), "name": "AURORA", "accent": Color("72c8d7")},
 	{"rect": Rect2(100, 790, 430, 220), "name": "ЖИЛОЙ ДОМ", "accent": Color("b69bd4")},
 	{"rect": Rect2(1160, 805, 420, 195), "name": "МАГАЗИНЫ", "accent": Color("79c39a")},
+	{"rect": Rect2(1840, 75, 440, 320), "name": "ОБЩЕСТВЕННЫЙ ЦЕНТР", "accent": Color("e2c36f")},
+	{"rect": Rect2(1840, 805, 420, 215), "name": "ПОЛИКЛИНИКА", "accent": Color("81b6d9")},
+	{"rect": Rect2(95, 1190, 505, 190), "name": "ЖИЛОЙ КВАРТАЛ", "accent": Color("aa91d2")},
+	{"rect": Rect2(1210, 1210, 400, 170), "name": "МАСТЕРСКИЕ", "accent": Color("cc8d68")},
 ]
 
 
@@ -22,8 +26,12 @@ func _draw() -> void:
 	_draw_grass_grid()
 	draw_rect(Rect2(0, 435, WORLD_SIZE.x, 250), Color("303941"))
 	draw_rect(Rect2(680, 0, 390, WORLD_SIZE.y), Color("303941"))
+	draw_rect(Rect2(1645, 0, 165, WORLD_SIZE.y), Color("303941"))
+	draw_rect(Rect2(0, 1035, WORLD_SIZE.x, 135), Color("303941"))
 	draw_rect(Rect2(610, 455, 540, 210), Color("697269"))
 	draw_rect(Rect2(632, 477, 496, 166), Color("7d857b"), false, 3.0)
+	draw_rect(Rect2(1815, 455, 500, 270), Color("59675e"))
+	draw_rect(Rect2(1834, 474, 462, 232), Color("788078"), false, 3.0)
 	_draw_crosswalk(Vector2(715, 405), true)
 	_draw_crosswalk(Vector2(1008, 705), true)
 	_draw_crosswalk(Vector2(610, 505), false)
@@ -33,6 +41,7 @@ func _draw() -> void:
 		_draw_building(building.rect, building.accent)
 
 	_draw_park()
+	_draw_east_square()
 	_draw_street_details()
 	_draw_aurora_entrance()
 
@@ -73,12 +82,24 @@ func _draw_park() -> void:
 		draw_line(bench_pos + Vector2(57, 14), bench_pos + Vector2(60, 24), Color("1c2526"), 4)
 
 
+func _draw_east_square() -> void:
+	for position in [Vector2(1870, 505), Vector2(2240, 505), Vector2(1870, 675), Vector2(2240, 675)]:
+		draw_circle(position + Vector2(3, 5), 20.0, Color(0, 0, 0, 0.24))
+		draw_circle(position, 18.0, Color("3d7650"))
+	draw_circle(Vector2(2065, 590), 38.0, Color("304a50"))
+	draw_circle(Vector2(2065, 590), 30.0, Color("72aeb5"), false, 4.0)
+	draw_circle(Vector2(2065, 590), 8.0, Color("d8c57c"))
+
+
 func _draw_street_details() -> void:
-	for x in range(45, 1760, 125):
+	for x in range(45, int(WORLD_SIZE.x), 125):
 		draw_line(Vector2(x, 555), Vector2(x + 55, 555), Color("869094"), 4.0)
-	for y in range(25, 1080, 120):
+	for y in range(25, int(WORLD_SIZE.y), 120):
 		draw_line(Vector2(875, y), Vector2(875, y + 55), Color("869094"), 4.0)
-	for light_pos in [Vector2(650, 445), Vector2(1110, 445), Vector2(650, 700), Vector2(1110, 700)]:
+		draw_line(Vector2(1725, y), Vector2(1725, y + 55), Color("869094"), 4.0)
+	for x in range(45, int(WORLD_SIZE.x), 145):
+		draw_line(Vector2(x, 1100), Vector2(x + 62, 1100), Color("869094"), 4.0)
+	for light_pos in [Vector2(650, 445), Vector2(1110, 445), Vector2(650, 700), Vector2(1110, 700), Vector2(1640, 430), Vector2(1815, 430), Vector2(1640, 740), Vector2(1815, 740)]:
 		draw_circle(light_pos + Vector2(3, 5), 10, Color(0, 0, 0, 0.3))
 		draw_circle(light_pos, 8, Color("f2d38a"))
 
@@ -136,3 +157,9 @@ func _create_signs() -> void:
 	plaza.add_theme_font_size_override("font_size", 15)
 	plaza.add_theme_color_override("font_color", Color("d8e1db"))
 	add_child(plaza)
+	var east_square := Label.new()
+	east_square.text = "ПЛОЩАДЬ СООБЩЕСТВА"
+	east_square.position = Vector2(1965, 485)
+	east_square.add_theme_font_size_override("font_size", 15)
+	east_square.add_theme_color_override("font_color", Color("e7debd"))
+	add_child(east_square)

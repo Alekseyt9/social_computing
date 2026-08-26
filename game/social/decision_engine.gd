@@ -97,6 +97,11 @@ static func _action_costs(action_type: String, context: Dictionary) -> Dictionar
 			defaults.personal_cost = 0.03
 			defaults.risk = 0.05
 			defaults.secrecy = 0.0
+		"JoinActivity":
+			defaults.expected_benefit = 0.68
+			defaults.personal_cost = 0.04
+			defaults.risk = 0.03
+			defaults.secrecy = 0.0
 		"AskAbout":
 			defaults.expected_benefit = 0.05
 			defaults.personal_cost = 0.10

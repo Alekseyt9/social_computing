@@ -5,53 +5,109 @@ const MAX_VISIBLE := 45
 const PLACE_ZONES := {
 	1: Rect2(1160, 430, 430, 300),
 	2: Rect2(625, 465, 470, 180),
-	3: Rect2(545, 705, 500, 250),
+	3: Rect2(620, 1180, 500, 190),
+	4: Rect2(85, 480, 425, 225),
+	5: Rect2(1165, 1015, 430, 170),
+	6: Rect2(1815, 430, 500, 315),
 }
 
 var _world: RefCounted
 var _citizens: Dictionary = {}
 var _motion_clock: float = 0.0
+var _interior_place_id: int = -1
+var _interior_zone := Rect2()
 
 
 func setup(world: RefCounted) -> void:
 	_world = world
 
 
+func enter_interior(place_id: int, activity_zone: Rect2) -> void:
+	_interior_place_id = place_id
+	_interior_zone = activity_zone
+	_citizens.clear()
+	queue_redraw()
+
+
+func exit_interior() -> void:
+	_interior_place_id = -1
+	_interior_zone = Rect2()
+	_citizens.clear()
+	queue_redraw()
+
+
 func sync_from_simulation() -> void:
 	if _world == null:
 		return
 	var adaptive: Dictionary = _world.get_adaptive_population_snapshot()
-	var desired: Dictionary = {}
 	var ids: Array = adaptive.get("refined_light_ids", [])
-	for index in range(mini(MAX_VISIBLE, ids.size())):
-		var agent_id := int(ids[index])
+	var refined: Dictionary = {}
+	for value: Variant in ids:
+		refined[int(value)] = true
+	# Existing residents get a chance to visibly finish a commute before they
+	# leave the local detailed set. Interactively promoted people disappear
+	# immediately because WorldScreen replaces them with a CharacterBody2D.
+	for agent_id: int in _citizens.keys():
+		if _world.has_person(agent_id):
+			_citizens.erase(agent_id)
+			continue
+		var view: Dictionary = _world.get_light_agent_view(agent_id)
+		if view.is_empty():
+			_citizens.erase(agent_id)
+			continue
+		var state: Dictionary = _citizens[agent_id]
+		var scheduled_place := int(view.current_place_id)
+		if scheduled_place != int(state.get("destination_place_id", state.place_id)):
+			_begin_trip(agent_id, state, scheduled_place, str(view.activity_label))
+		elif not bool(state.get("traveling", false)):
+			state["activity_label"] = str(view.activity_label)
+		state["retiring"] = not refined.has(agent_id)
+		state["accent"] = _agent_color(view)
+		state["activity"] = str(view.current_activity)
+		if bool(state.retiring) and not bool(state.traveling):
+			_citizens.erase(agent_id)
+		else:
+			_citizens[agent_id] = state
+	# Fill the remaining visual budget. If a schedule boundary was crossed in
+	# the last sync interval, the new citizen starts at the previous place and
+	# walks the route instead of popping into existence at the destination.
+	for value: Variant in ids:
+		if _citizens.size() >= MAX_VISIBLE:
+			break
+		var agent_id := int(value)
+		if _citizens.has(agent_id) or _world.has_person(agent_id):
+			continue
 		var view: Dictionary = _world.get_light_agent_view(agent_id)
 		if view.is_empty():
 			continue
 		var place_id := int(view.current_place_id)
-		var zone: Rect2 = PLACE_ZONES.get(place_id, PLACE_ZONES[2])
-		desired[agent_id] = true
-		if not _citizens.has(agent_id):
-			var start := _point_in_zone(agent_id, 11, zone)
-			_citizens[agent_id] = {
-				"position": start,
-				"target": _point_in_zone(agent_id, 29, zone),
-				"place_id": place_id,
-				"speed": 25.0 + float(agent_id % 23),
-				"accent": _agent_color(view),
-				"phase": _unit(agent_id, 43) * TAU,
-			}
+		var previous: Dictionary = _world.get_light_agent_schedule_state(
+			agent_id, maxi(0, int(_world.tick) - 12)
+		)
+		var origin_place := int(previous.get("place_id", place_id))
+		if _interior_place_id == place_id:
+			origin_place = place_id
+		var origin_zone: Rect2 = get_place_zone(origin_place)
+		var state := {
+			"position": _point_in_zone(agent_id, 11, origin_zone),
+			"target": Vector2.ZERO,
+			"place_id": origin_place,
+			"destination_place_id": origin_place,
+			"route": [] as Array[Vector2],
+			"traveling": false,
+			"retiring": false,
+			"speed": 25.0 + float(agent_id % 23),
+			"travel_speed": 86.0 + float(agent_id % 29),
+			"accent": _agent_color(view),
+			"phase": _unit(agent_id, 43) * TAU,
+			"activity": str(view.current_activity),
+			"activity_label": str(view.activity_label),
+		}
+		if origin_place != place_id:
+			_begin_trip(agent_id, state, place_id, str(view.activity_label))
 		else:
-			var state: Dictionary = _citizens[agent_id]
-			if int(state.place_id) != place_id:
-				state["place_id"] = place_id
-				state["position"] = _point_in_zone(agent_id, int(_motion_clock) + 47, zone)
-				state["target"] = _point_in_zone(agent_id, int(_motion_clock) + 71, zone)
-			state["accent"] = _agent_color(view)
-			_citizens[agent_id] = state
-	for agent_id: int in _citizens.keys():
-		if not desired.has(agent_id):
-			_citizens.erase(agent_id)
+			state["target"] = _point_in_zone(agent_id, 29, origin_zone)
+		_citizens[agent_id] = state
 	queue_redraw()
 
 
@@ -61,6 +117,14 @@ func get_visible_count() -> int:
 
 func has_citizen(agent_id: int) -> bool:
 	return _citizens.has(agent_id)
+
+
+func get_traveling_count() -> int:
+	var count := 0
+	for state: Dictionary in _citizens.values():
+		if bool(state.get("traveling", false)):
+			count += 1
+	return count
 
 
 func get_nearest_citizen(world_position: Vector2, max_distance: float) -> Dictionary:
@@ -78,30 +142,65 @@ func get_nearest_citizen(world_position: Vector2, max_distance: float) -> Dictio
 			"place_id": int(state.place_id),
 			"accent": state.accent,
 			"distance": distance,
+			"activity": str(state.get("activity", "")),
+			"activity_label": str(state.get("activity_label", "")),
+			"traveling": bool(state.get("traveling", false)),
 		}
 	return nearest
 
 
 func get_place_zone(place_id: int) -> Rect2:
+	if place_id == _interior_place_id and _interior_zone.has_area():
+		return _interior_zone
 	return PLACE_ZONES.get(place_id, PLACE_ZONES[2])
+
+
+func get_spawn_point(agent_id: int, place_id: int) -> Vector2:
+	return _point_in_zone(agent_id, 83 + place_id * 17, get_place_zone(place_id))
 
 
 func _process(delta: float) -> void:
 	_motion_clock += delta
+	var completed_retirements: Array[int] = []
 	for agent_id: int in _citizens:
 		var state: Dictionary = _citizens[agent_id]
 		var position_value: Vector2 = state.position
 		var target_value: Vector2 = state.target
 		if position_value.distance_to(target_value) < 5.0:
-			var zone: Rect2 = PLACE_ZONES.get(int(state.place_id), PLACE_ZONES[2])
-			state["target"] = _point_in_zone(
-				agent_id, int(_motion_clock * 10.0) + agent_id, zone
-			)
+			if bool(state.get("traveling", false)):
+				var route: Array = state.get("route", [])
+				if not route.is_empty():
+					state["target"] = route.pop_front()
+					state["route"] = route
+				else:
+					state["traveling"] = false
+					state["place_id"] = int(state.destination_place_id)
+					state["activity_label"] = str(
+						state.get("destination_activity_label", state.activity_label)
+					)
+					if bool(state.get("retiring", false)):
+						completed_retirements.append(agent_id)
+					else:
+						var arrival_zone := get_place_zone(int(state.place_id))
+						state["target"] = _point_in_zone(
+							agent_id, int(_motion_clock * 10.0) + agent_id, arrival_zone
+						)
+			else:
+				var zone: Rect2 = get_place_zone(int(state.place_id))
+				state["target"] = _point_in_zone(
+					agent_id, int(_motion_clock * 10.0) + agent_id, zone
+				)
 		else:
+			var movement_speed := (
+				float(state.travel_speed) if bool(state.get("traveling", false))
+				else float(state.speed)
+			)
 			state["position"] = position_value.move_toward(
-				target_value, float(state.speed) * delta
+				target_value, movement_speed * delta
 			)
 		_citizens[agent_id] = state
+	for agent_id: int in completed_retirements:
+		_citizens.erase(agent_id)
 	queue_redraw()
 
 
@@ -116,6 +215,82 @@ func _draw() -> void:
 		draw_line(point + Vector2(4, 5), point + Vector2(5, 12), accent.darkened(0.35), 2.0)
 		draw_circle(point + Vector2(0, bob), 9.0, accent.darkened(0.15))
 		draw_circle(point + Vector2(0, -7 + bob), 5.5, accent.lightened(0.18))
+		if bool(state.get("traveling", false)):
+			draw_rect(Rect2(point + Vector2(6, -1 + bob), Vector2(5, 8)), accent.lightened(0.35))
+
+
+func _begin_trip(
+	agent_id: int, state: Dictionary, destination_place_id: int, activity_label: String
+) -> void:
+	var origin_place := int(state.get("place_id", destination_place_id))
+	var destination_zone := get_place_zone(destination_place_id)
+	var destination := _point_in_zone(
+		agent_id, int(_world.tick) + destination_place_id * 41, destination_zone
+	)
+	var route := _route_between(
+		state.position, origin_place, destination_place_id, destination
+	)
+	state["destination_place_id"] = destination_place_id
+	state["traveling"] = true
+	state["destination_activity_label"] = activity_label
+	state["activity_label"] = "идёт: %s" % activity_label
+	state["route"] = route
+	state["target"] = route.pop_front() if not route.is_empty() else destination
+	state["route"] = route
+
+
+func _route_between(
+	from_position: Vector2,
+	from_place_id: int,
+	destination_place_id: int,
+	destination: Vector2
+) -> Array[Vector2]:
+	var points: Array[Vector2] = []
+	var origin_gate := _place_gate(from_place_id)
+	if from_position.distance_to(origin_gate) > 10.0:
+		points.append(origin_gate)
+	var origin_hubs := _hubs_to_center(from_place_id)
+	for point: Vector2 in origin_hubs:
+		points.append(point)
+	var destination_hubs := _hubs_to_center(destination_place_id)
+	destination_hubs.reverse()
+	for point: Vector2 in destination_hubs:
+		if points.is_empty() or points.back().distance_to(point) > 4.0:
+			points.append(point)
+	var destination_gate := _place_gate(destination_place_id)
+	if points.is_empty() or points.back().distance_to(destination_gate) > 4.0:
+		points.append(destination_gate)
+	points.append(destination)
+	return points
+
+
+func _hubs_to_center(place_id: int) -> Array[Vector2]:
+	match place_id:
+		1:
+			return [Vector2(1120, 560), Vector2(875, 560)] as Array[Vector2]
+		2:
+			return [Vector2(875, 560)] as Array[Vector2]
+		3:
+			return [Vector2(875, 1100), Vector2(875, 560)] as Array[Vector2]
+		4:
+			return [Vector2(610, 560), Vector2(875, 560)] as Array[Vector2]
+		5:
+			return [Vector2(1370, 1100), Vector2(1725, 1100), Vector2(1725, 560), Vector2(875, 560)] as Array[Vector2]
+		6:
+			return [Vector2(1815, 560), Vector2(1725, 560), Vector2(875, 560)] as Array[Vector2]
+		_:
+			return [Vector2(875, 560)] as Array[Vector2]
+
+
+func _place_gate(place_id: int) -> Vector2:
+	match place_id:
+		1: return Vector2(1385, 430)
+		2: return Vector2(875, 560)
+		3: return Vector2(875, 1175)
+		4: return Vector2(515, 560)
+		5: return Vector2(1370, 1015)
+		6: return Vector2(1815, 590)
+		_: return Vector2(875, 560)
 
 
 func _agent_color(view: Dictionary) -> Color:
