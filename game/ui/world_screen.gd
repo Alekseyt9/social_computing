@@ -10,6 +10,7 @@ const SocialActionPresenterScript := preload("res://rendering/social_action_pres
 const SocialMapPanelScript := preload("res://ui/social_map_panel.gd")
 const AmbientCrowdLayerScript := preload("res://world/ambient_crowd_layer.gd")
 const PlaceInteriorScript := preload("res://world/place_interior.gd")
+const SaveGameServiceScript := preload("res://core/save_game_service.gd")
 
 const INTERACTION_DISTANCE := 92.0
 const INTERIOR_ORIGIN := Vector2(2600, 0)
@@ -83,6 +84,9 @@ var _news_feed_label: RichTextLabel
 var _toast_panel: PanelContainer
 var _toast_label: Label
 var _toast_remaining: float = 0.0
+var _save_menu_overlay: PanelContainer
+var _save_slot_labels: Dictionary = {}
+var _save_status_label: Label
 
 
 func _ready() -> void:
@@ -101,6 +105,8 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_update_toast(delta)
+	if _save_menu_overlay != null and _save_menu_overlay.visible:
+		return
 	_simulation_accumulator += delta
 	if _simulation_accumulator >= 1.0:
 		var elapsed_ticks := int(_simulation_accumulator)
@@ -114,7 +120,18 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_T and not (
+		if _save_menu_overlay != null and _save_menu_overlay.visible:
+			if event.keycode == KEY_ESCAPE:
+				_toggle_save_menu()
+			get_viewport().set_input_as_handled()
+			return
+		if event.keycode == KEY_F5:
+			_save_to_slot(1)
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_F9:
+			_load_from_slot(1)
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_T and not (
 			_dialogue_panel.visible or _social_map_overlay.visible or _debug_overlay.visible
 		):
 			world.advance(12) # One visible hour; useful for observing daily routines.
@@ -148,8 +165,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_debug_inspector()
 			elif _dialogue_panel.visible:
 				_close_dialogue()
-			elif not _current_interior.is_empty():
-				_exit_place()
+			else:
+				_toggle_save_menu()
 			get_viewport().set_input_as_handled()
 
 
@@ -215,6 +232,125 @@ func _player_place_id() -> int:
 	return 2 # Cafe, park and public square
 
 
+func _enter_place(place_id: int) -> void:
+	if not INTERACTIVE_PLACES.has(place_id) or not _current_interior.is_empty():
+		return
+	var definition: Dictionary = INTERACTIVE_PLACES[place_id]
+	_outdoor_return_position = player.global_position
+	_current_interior = definition.duplicate(true)
+	_current_interior["id"] = place_id
+	world.visit_public_place(world.player_id, place_id)
+	_world_map.visible = false
+	_interior_map.configure(place_id, str(definition.name), definition.color)
+	_interior_map.visible = true
+	_set_story_npcs_active(false)
+	_dematerialize_all_adaptive_npcs()
+	_ambient_crowd.enter_interior(place_id, _interior_map.get_activity_zone())
+	player.global_position = _interior_map.get_entry_position()
+	_set_camera_limits(_interior_map.get_camera_limits(), Vector2(0.92, 0.92))
+	_update_adaptive_focus(true)
+	_update_hud()
+	_update_nearby_npc()
+	_toast_label.text = "Вы вошли: %s · посетители зависят от расписания" % str(definition.name)
+	_toast_remaining = 3.0
+	_toast_panel.visible = true
+
+
+func _exit_place() -> void:
+	if _current_interior.is_empty():
+		return
+	_dematerialize_all_adaptive_npcs()
+	_ambient_crowd.exit_interior()
+	_interior_map.visible = false
+	_world_map.visible = true
+	_current_interior = {}
+	player.global_position = _outdoor_return_position
+	world.visit_public_place(world.player_id, _player_place_id())
+	_set_camera_limits(Rect2(Vector2.ZERO, WorldMapScript.WORLD_SIZE), Vector2(1.05, 1.05))
+	_set_story_npcs_active(true)
+	_update_adaptive_focus(true)
+	_update_hud()
+	_update_nearby_npc()
+
+
+func _set_camera_limits(bounds: Rect2, zoom: Vector2) -> void:
+	var camera := player.get_node("Camera2D") as Camera2D
+	camera.limit_left = int(bounds.position.x)
+	camera.limit_top = int(bounds.position.y)
+	camera.limit_right = int(bounds.end.x)
+	camera.limit_bottom = int(bounds.end.y)
+	camera.zoom = zoom
+	camera.reset_smoothing()
+
+
+func _set_story_npcs_active(active: bool) -> void:
+	for person_id: int in _npc_by_id:
+		if person_id >= 10_000:
+			continue
+		var npc: CharacterBody2D = _npc_by_id[person_id]
+		npc.visible = active
+		npc.set_physics_process(active)
+
+
+func _sync_active_adaptive_npcs() -> void:
+	if world == null or _ambient_crowd == null:
+		return
+	var player_place := _player_place_id()
+	for person_id: int in world.get_activated_adaptive_person_ids():
+		var schedule: Dictionary = world.get_person_activity_view(person_id)
+		var should_be_active := (
+			not schedule.is_empty() and int(schedule.place_id) == player_place
+		)
+		var existing: CharacterBody2D = _npc_by_id.get(person_id)
+		if existing != null and not is_instance_valid(existing):
+			_npc_by_id.erase(person_id)
+			existing = null
+		if not should_be_active:
+			if existing != null and existing != _dialogue_npc:
+				existing.queue_free()
+				_npc_by_id.erase(person_id)
+			continue
+		var zone: Rect2 = _ambient_crowd.get_place_zone(player_place)
+		if existing != null:
+			existing.visible = true
+			existing.set_physics_process(true)
+			existing.set_movement_zone(zone)
+			continue
+		var citizen := {
+			"place_id": player_place,
+			"position": _ambient_crowd.get_spawn_point(person_id, player_place),
+			"accent": _adaptive_person_color(person_id),
+		}
+		_spawn_adaptive_npc(person_id, citizen)
+
+
+func _dematerialize_all_adaptive_npcs() -> void:
+	for person_id: int in _npc_by_id.keys():
+		if person_id < 10_000:
+			continue
+		var npc: CharacterBody2D = _npc_by_id[person_id]
+		if is_instance_valid(npc):
+			npc.queue_free()
+		_npc_by_id.erase(person_id)
+	_dialogue_npc = null
+
+
+func _adaptive_person_color(person_id: int) -> Color:
+	var view: Dictionary = world.get_light_agent_view(person_id)
+	match int(view.get("workplace_organization_id", 0)):
+		1: return Color("66aeb8")
+		2: return Color("c59563")
+		_: return Color("8796a0")
+
+
+func get_active_adaptive_npc_count() -> int:
+	var count := 0
+	for person_id: int in _npc_by_id:
+		if person_id >= 10_000 and is_instance_valid(_npc_by_id[person_id]):
+			count += 1
+	return count
+
+
 func _build_npcs() -> void:
 	for data: Dictionary in NPC_DATA:
 		var npc := NpcControllerScript.new()
@@ -265,7 +401,7 @@ func _build_hud() -> void:
 	clock_panel.add_child(_clock_label)
 
 	var controls := Label.new()
-	controls.text = "WASD — движение   E — диалог   T — +1 час   M — связи   F3 — debug"
+	controls.text = "WASD · E диалог · T +1ч · Esc меню · F5 сохранить · F9 загрузить"
 	controls.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	controls.position = Vector2(-455, 94)
 	controls.size = Vector2(430, 30)
@@ -292,6 +428,7 @@ func _build_hud() -> void:
 	_build_district_pulse(canvas)
 	_build_news_feed(canvas)
 	_build_toast(canvas)
+	_build_save_menu(canvas)
 	_build_social_map(canvas)
 	_build_debug_inspector(canvas)
 
@@ -364,6 +501,74 @@ func _build_toast(canvas: CanvasLayer) -> void:
 	_toast_panel.add_child(_toast_label)
 
 
+func _build_save_menu(canvas: CanvasLayer) -> void:
+	_save_menu_overlay = PanelContainer.new()
+	_save_menu_overlay.name = "SaveLoadMenu"
+	_save_menu_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_save_menu_overlay.position = Vector2(-390, -270)
+	_save_menu_overlay.size = Vector2(780, 540)
+	_save_menu_overlay.add_theme_stylebox_override(
+		"panel", _panel_style(Color("0d171cf8"), Color("78cbd3"), 16)
+	)
+	_save_menu_overlay.visible = false
+	canvas.add_child(_save_menu_overlay)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	_save_menu_overlay.add_child(box)
+	var title := Label.new()
+	title.text = "СОХРАНЕНИЕ И ЗАГРУЗКА"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color("8ed9de"))
+	box.add_child(title)
+	var hint := Label.new()
+	hint.text = "Сохраняется весь мир: люди, отношения, деньги, история и текущее место"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color("c7d2cd"))
+	box.add_child(hint)
+	for slot in range(1, SaveGameServiceScript.SLOT_COUNT + 1):
+		var row_panel := PanelContainer.new()
+		row_panel.custom_minimum_size = Vector2(0, 92)
+		row_panel.add_theme_stylebox_override(
+			"panel", _panel_style(Color("1b292f"), Color("475e66"), 10)
+		)
+		box.add_child(row_panel)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		row_panel.add_child(row)
+		var label := Label.new()
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.add_theme_font_size_override("font_size", 15)
+		label.add_theme_color_override("font_color", Color("e9eee9"))
+		row.add_child(label)
+		_save_slot_labels[slot] = label
+		var save_button := Button.new()
+		save_button.text = "Сохранить"
+		save_button.custom_minimum_size = Vector2(130, 46)
+		save_button.pressed.connect(_save_to_slot.bind(slot))
+		_style_button(save_button, true)
+		row.add_child(save_button)
+		var load_button := Button.new()
+		load_button.text = "Загрузить"
+		load_button.custom_minimum_size = Vector2(130, 46)
+		load_button.pressed.connect(_load_from_slot.bind(slot))
+		_style_button(load_button, false)
+		row.add_child(load_button)
+	_save_status_label = Label.new()
+	_save_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_save_status_label.add_theme_font_size_override("font_size", 14)
+	_save_status_label.add_theme_color_override("font_color", Color("e6c478"))
+	box.add_child(_save_status_label)
+	var close_button := Button.new()
+	close_button.text = "Вернуться в игру  [Esc]"
+	close_button.custom_minimum_size = Vector2(0, 44)
+	close_button.pressed.connect(_toggle_save_menu)
+	_style_button(close_button, false)
+	box.add_child(close_button)
+	_refresh_save_slots()
+
+
 func _build_social_map(canvas: CanvasLayer) -> void:
 	_social_map_overlay = PanelContainer.new()
 	_social_map_overlay.set_anchors_preset(Control.PRESET_CENTER)
@@ -418,9 +623,146 @@ func _toggle_debug_inspector() -> void:
 	_sync_player_input()
 
 
+func _toggle_save_menu() -> void:
+	_save_menu_overlay.visible = not _save_menu_overlay.visible
+	if _save_menu_overlay.visible:
+		_refresh_save_slots()
+		_save_status_label.text = "F5/F9 используют слот 1"
+	_sync_player_input()
+
+
+func _save_to_slot(slot: int) -> void:
+	var result: Dictionary = SaveGameServiceScript.save_slot(
+		slot, world.export_save_data(), _capture_view_state()
+	)
+	if bool(result.get("ok", false)):
+		_show_save_status("Слот %d сохранён" % slot, true)
+		_refresh_save_slots()
+	else:
+		_show_save_status("Не удалось сохранить: %s" % str(result.get("error", "ERROR")), false)
+
+
+func _load_from_slot(slot: int) -> void:
+	if groq_client != null and groq_client.is_busy():
+		_show_save_status("Дождитесь ответа персонажа перед загрузкой", false)
+		return
+	var loaded: Dictionary = SaveGameServiceScript.load_slot(slot)
+	if not bool(loaded.get("ok", false)):
+		_show_save_status("Слот %d пуст или повреждён" % slot, false)
+		return
+	var restored: RefCounted = SimulationWorldScript.create_from_save_data(loaded.world)
+	if restored == null:
+		_show_save_status("Контрольная сумма слота %d не совпала" % slot, false)
+		return
+	_restore_loaded_game(restored, loaded.view)
+	_show_save_status("Слот %d загружен" % slot, true)
+
+
+func _capture_view_state() -> Dictionary:
+	var story_positions: Array[Dictionary] = []
+	for person_id: int in _npc_by_id:
+		if person_id >= 10_000:
+			continue
+		var npc: CharacterBody2D = _npc_by_id[person_id]
+		story_positions.append({
+			"person_id": person_id,
+			"x": npc.global_position.x,
+			"y": npc.global_position.y,
+		})
+	return {
+		"player": {"x": player.global_position.x, "y": player.global_position.y},
+		"outdoor_return": {
+			"x": _outdoor_return_position.x, "y": _outdoor_return_position.y,
+		},
+		"interior_place_id": int(_current_interior.get("id", -1)),
+		"story_npc_positions": story_positions,
+		"simulation_accumulator": _simulation_accumulator,
+	}
+
+
+func _restore_loaded_game(restored: RefCounted, view: Dictionary) -> void:
+	_dialogue_panel.visible = false
+	_social_map_overlay.visible = false
+	_debug_overlay.visible = false
+	_pending_act = {}
+	_pending_fallback = ""
+	_pending_player_line = ""
+	_dematerialize_all_adaptive_npcs()
+	_ambient_crowd.exit_interior()
+	_interior_map.visible = false
+	_world_map.visible = true
+	_current_interior = {}
+	_set_story_npcs_active(true)
+	world = restored
+	_ambient_crowd.setup(world)
+	var player_state: Dictionary = view.get("player", {})
+	player.global_position = Vector2(
+		float(player_state.get("x", 790.0)), float(player_state.get("y", 585.0))
+	)
+	var return_state: Dictionary = view.get("outdoor_return", {})
+	_outdoor_return_position = Vector2(
+		float(return_state.get("x", 790.0)), float(return_state.get("y", 585.0))
+	)
+	for position_state: Dictionary in view.get("story_npc_positions", []):
+		var person_id := int(position_state.get("person_id", -1))
+		if _npc_by_id.has(person_id):
+			_npc_by_id[person_id].global_position = Vector2(
+				float(position_state.get("x", 0.0)), float(position_state.get("y", 0.0))
+			)
+	_simulation_accumulator = float(view.get("simulation_accumulator", 0.0))
+	var interior_place_id := int(view.get("interior_place_id", -1))
+	if INTERACTIVE_PLACES.has(interior_place_id):
+		var definition: Dictionary = INTERACTIVE_PLACES[interior_place_id]
+		_current_interior = definition.duplicate(true)
+		_current_interior["id"] = interior_place_id
+		_world_map.visible = false
+		_interior_map.configure(interior_place_id, str(definition.name), definition.color)
+		_interior_map.visible = true
+		_set_story_npcs_active(false)
+		_ambient_crowd.enter_interior(
+			interior_place_id, _interior_map.get_activity_zone()
+		)
+		_set_camera_limits(_interior_map.get_camera_limits(), Vector2(0.92, 0.92))
+	else:
+		_set_camera_limits(Rect2(Vector2.ZERO, WorldMapScript.WORLD_SIZE), Vector2(1.05, 1.05))
+	_ambient_crowd.sync_from_simulation()
+	_sync_active_adaptive_npcs()
+	_last_adaptive_focus_tick = int(world.tick)
+	_update_npc_labels()
+	_update_hud()
+	_save_menu_overlay.visible = false
+	_sync_player_input()
+	_update_nearby_npc()
+
+
+func _refresh_save_slots() -> void:
+	for slot in range(1, SaveGameServiceScript.SLOT_COUNT + 1):
+		var metadata: Dictionary = SaveGameServiceScript.get_slot_metadata(slot)
+		var label: Label = _save_slot_labels.get(slot)
+		if bool(metadata.get("empty", true)):
+			label.text = "СЛОТ %d\nПусто" % slot
+		else:
+			label.text = "СЛОТ %d · тик %d\n%s" % [
+				slot, int(metadata.get("tick", 0)), str(metadata.get("saved_at", "")),
+			]
+
+
+func _show_save_status(message: String, success: bool) -> void:
+	if _save_status_label != null:
+		_save_status_label.text = message
+		_save_status_label.add_theme_color_override(
+			"font_color", Color("8fd0a2") if success else Color("e28484")
+		)
+	if _toast_label != null:
+		_toast_label.text = message
+		_toast_remaining = 3.0
+		_toast_panel.visible = true
+
+
 func _sync_player_input() -> void:
 	player.input_enabled = not (
 		_dialogue_panel.visible or _social_map_overlay.visible or _debug_overlay.visible
+		or (_save_menu_overlay != null and _save_menu_overlay.visible)
 	)
 	if not player.input_enabled:
 		player.velocity = Vector2.ZERO
@@ -635,6 +977,7 @@ func _close_dialogue() -> void:
 	_pending_act = {}
 	_pending_fallback = ""
 	_pending_player_line = ""
+	_sync_active_adaptive_npcs()
 	_update_nearby_npc()
 
 
@@ -683,7 +1026,10 @@ func _perform_model_action(action: Dictionary) -> void:
 			world.player_id, _dialogue_npc.person_id
 		)
 		render_context["player_line"] = result.player_line
-		render_context["location"] = "Aurora district"
+		render_context["location"] = (
+			str(_current_interior.name) if not _current_interior.is_empty()
+			else "Aurora district"
+		)
 		var user_prompt := SocialRendererScript.build_user_prompt(
 			identity, result.communicative_act, render_context
 		)
@@ -732,6 +1078,9 @@ func _show_dialogue_response(response: String, source: String) -> void:
 	_update_npc_labels()
 	_speaker_label.text = name
 	_role_label.text = world.get_person_role(_dialogue_npc.person_id)
+	var activity: Dictionary = world.get_person_activity_view(_dialogue_npc.person_id)
+	if not activity.is_empty():
+		_role_label.text += " · %s" % str(activity.activity_label)
 	_refresh_dialogue_actions()
 	_update_hud()
 	_refresh_debug_inspector()

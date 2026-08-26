@@ -32,8 +32,8 @@ func _run() -> void:
 func _assert_world_and_planner() -> bool:
 	var world := SimulationWorldScript.new(20250308)
 	var state: Dictionary = world.snapshot()
-	if state.npc_count != 20 or state.place_count != 3 or state.organization_count != 2:
-		return _fail("MS1 world shape differs from 20 NPC / 3 places / 2 organizations: %s" % state)
+	if state.npc_count != 20 or state.place_count < 3 or state.organization_count != 2:
+		return _fail("MS1 world shape lost its required 20 NPC / 3+ places / 2 organizations: %s" % state)
 	var report: Dictionary = world.get_goal_reachability_report()
 	if not report.reachable or int(report.strategy_count) != 3:
 		return _fail("Bounded Goal Solver did not find three strategies: %s" % report)

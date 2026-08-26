@@ -115,6 +115,14 @@ func get_visible_count() -> int:
 	return _citizens.size()
 
 
+func get_visible_citizen_ids() -> Array[int]:
+	var result: Array[int] = []
+	for agent_id: int in _citizens:
+		result.append(agent_id)
+	result.sort()
+	return result
+
+
 func has_citizen(agent_id: int) -> bool:
 	return _citizens.has(agent_id)
 

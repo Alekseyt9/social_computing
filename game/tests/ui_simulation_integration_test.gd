@@ -15,7 +15,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	for required_path: String in [
-		"HUD/DistrictPulse", "HUD/NewsFeed", "HUD/ConsequenceToast", "AmbientCrowd",
+		"HUD/DistrictPulse", "HUD/NewsFeed", "HUD/ConsequenceToast",
+		"HUD/SaveLoadMenu", "AmbientCrowd", "PlaceInterior",
 	]:
 		if scene.get_node_or_null(required_path) == null:
 			_fail("Player-facing UI node is missing: %s" % required_path)

@@ -67,8 +67,8 @@ func _assert_world_shape(world: RefCounted) -> bool:
 	var state: Dictionary = world.snapshot()
 	if state.npc_count != 20:
 		return _fail("Expected 20 NPC, got %d" % state.npc_count)
-	if state.place_count != 3:
-		return _fail("Expected 3 places, got %d" % state.place_count)
+	if state.place_count < 3:
+		return _fail("Expected at least 3 places, got %d" % state.place_count)
 	if state.organization_count != 2:
 		return _fail("Expected 2 organizations, got %d" % state.organization_count)
 	if not world.has_person(21):

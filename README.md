@@ -80,6 +80,8 @@ Implemented so far:
   events, metrics, renderer prompts, raw output, and validated final dialogue;
 - a qualitative District Pulse panel driven by MS4 fields, an observer-safe
   district news feed, and consequence notifications for computed action effects;
+- a three-slot save/load menu that restores the deterministic world, adaptive
+  population, relationships, histories, player position, and current interior;
 - up to 45 moving ambient residents rendered from the current adaptive
   LightAgent working set, without creating physics-heavy NPC nodes for all 1,200;
 - a walking-skeleton interface and headless acceptance tests.
@@ -137,10 +139,34 @@ Requires Godot 4.7+.
 For a double-click launch, open the `game` folder and run `START_GAME.cmd`. It
 automatically loads the local `.env` through the main launch script.
 
-Controls: `WASD` or the arrow keys to walk, `E` to start or close a nearby
-conversation, `M` to open the known-social-graph map, `F3` to open the developer
-inspector, and `Esc` to close the active panel. The camera follows the player;
-buildings and the edge of the district block movement.
+Controls: `WASD` or the arrow keys to walk, `E` to interact, `T` to advance one
+simulated hour, `M` to open the known-social-graph map, and `F3` to open the
+developer inspector. Press `Esc` to close the active panel or open the save/load
+menu. `F5` quick-saves to slot 1 and `F9` quick-loads slot 1. The camera follows
+the player; buildings and the edge of the district block movement.
+
+### Saving and loading
+
+Open the menu with `Esc`. There are three independent slots; each row has
+`Save` and `Load` actions. A save restores the canonical simulation state,
+including time, people, adaptive-detail tiers, schedules, money, relationships,
+knowledge, social fields, generated history, the player's position, moving story
+NPC positions, and the current building interior. The save is versioned and
+verified against deterministic checksums when loaded; an invalid or damaged file
+is rejected instead of partially applying it.
+
+Save files are readable JSON at:
+
+```text
+%APPDATA%\Godot\app_userdata\Adaptive Social Immersive Sim\saves\slot_1.json
+```
+
+Slots 2 and 3 use `slot_2.json` and `slot_3.json`. Run the offline save/load
+round-trip regression with:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/save_load_roundtrip_test.gd
+```
 
 The simplest way to start the game from PowerShell at the repository root is:
 
@@ -288,6 +314,31 @@ Run the map/schedule/commute regression:
 
 ```powershell
 godot_console --headless --path ./game --script res://tests/schedule_and_district_test.gd
+```
+
+### Contextual activities, ActiveNPC lifecycle, and interiors
+
+Known adaptive NPCs now expose a model action derived from their live schedule:
+talk about work, help with errands, join a walk, review vacancies, spend social
+time, or participate in community work. `DecisionEngine` resolves acceptance;
+accepted activities update needs and relationships. Shopping/cafe activities
+also execute a conserved money transfer between canonical population agents and
+produce observer-safe world events.
+
+Adaptive people only have a `CharacterBody2D` while their scheduled place is the
+same as the player's. Leaving the detailed area dematerializes the ActiveNPC but
+keeps its PersistentNPC identity, relationships, facts and lazy history. Entering
+its later destination materializes the same ID and name again.
+
+The cafe, shopping quarter and community center have top-down playable interiors.
+Approach their exterior door and press `E`; occupants are selected from current
+population schedules. The exit is at the bottom of each interior (`E` or `Esc`).
+Place entry is recorded as a canonical simulation event rather than UI-only state.
+
+Run the combined vertical-slice regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/activity_places_lifecycle_test.gd
 ```
 
 ### District Social Fields (MS4)

@@ -51,6 +51,7 @@ var _invitation_fact_ids: Dictionary = {}
 var _access_token_fact_ids_by_person: Dictionary = {}
 var _access_issuer_fact_ids: Dictionary = {}
 var _entered_aurora: Dictionary = {}
+var _current_place_by_person: Dictionary = {}
 var _party_fact_id: int = -1
 var _event_organizer_fact_ids: Dictionary = {}
 var _needs_by_person: Dictionary = {}
@@ -64,6 +65,8 @@ var _adaptive_population: RefCounted
 var _district_fields: RefCounted
 var _lazy_history: RefCounted
 var _activated_adaptive_person_ids: Dictionary = {}
+var _command_log: Array[Dictionary] = []
+var _is_replaying: bool = false
 
 const RESIDENT_FIRST_NAMES := [
 	"Алексей", "Анна", "Борис", "Вера", "Глеб", "Дарья", "Егор", "Жанна",
@@ -81,6 +84,7 @@ func _init(initial_seed: int) -> void:
 	seed = initial_seed
 	_random_state = initial_seed & _LCG_MASK
 	_build_aurora_scenario()
+	_current_place_by_person[player_id] = 2
 	_light_population = LightPopulationSimulationScript.new(initial_seed, 1200)
 	_adaptive_population = AdaptivePopulationSystemScript.new(
 		_light_population, get_npc_count(), 60
@@ -92,6 +96,8 @@ func _init(initial_seed: int) -> void:
 
 func advance(ticks: int) -> Dictionary:
 	assert(ticks >= 0, "Tick count cannot be negative")
+	if ticks > 0:
+		_record_command("ADVANCE", {"ticks": ticks})
 	for _index in range(ticks):
 		_next_random_int()
 		tick += 1
@@ -142,6 +148,33 @@ func get_npc_count() -> int:
 
 func get_place_count() -> int:
 	return _places.size()
+
+
+func visit_public_place(person_id: int, place_id: int) -> Dictionary:
+	if not _people.has(person_id):
+		return {"ok": false, "error": "UNKNOWN_PERSON"}
+	if not _places.has(place_id):
+		return {"ok": false, "error": "UNKNOWN_PLACE"}
+	var previous_place_id := int(_current_place_by_person.get(person_id, -1))
+	_current_place_by_person[person_id] = place_id
+	if previous_place_id != place_id:
+		_record_command("VISIT_PLACE", {"person_id": person_id, "place_id": place_id})
+		_events.append(SocialEventScript.new(
+			_next_event_id, "entered_public_place", [person_id] as Array[int],
+			[] as Array[int], place_id, tick, 0.20, 0.08, 0.0,
+			[] as Array[int]
+		))
+		_next_event_id += 1
+	return {
+		"ok": true,
+		"place_id": place_id,
+		"place_name": str(_places[place_id].display_name),
+		"previous_place_id": previous_place_id,
+	}
+
+
+func get_current_place_id(person_id: int) -> int:
+	return int(_current_place_by_person.get(person_id, -1))
 
 
 func get_organization_count() -> int:
@@ -219,11 +252,19 @@ func get_adaptive_population_snapshot() -> Dictionary:
 func refine_light_neighborhood(
 	anchor_agent_id: int, max_depth: int = 1, limit: int = 60
 ) -> Dictionary:
-	return _adaptive_population.refine_neighborhood(anchor_agent_id, max_depth, limit)
+	var result: Dictionary = _adaptive_population.refine_neighborhood(anchor_agent_id, max_depth, limit)
+	if bool(result.get("ok", false)):
+		_record_command("REFINE_NEIGHBORHOOD", {
+			"anchor_agent_id": anchor_agent_id, "max_depth": max_depth, "limit": limit,
+		})
+	return result
 
 
 func refine_all_light_agents() -> Dictionary:
-	return _adaptive_population.refine_all()
+	var result: Dictionary = _adaptive_population.refine_all()
+	if bool(result.get("ok", false)):
+		_record_command("REFINE_ALL", {})
+	return result
 
 
 func update_adaptive_focus(
@@ -231,15 +272,25 @@ func update_adaptive_focus(
 	socially_relevant_light_ids: Array = [],
 	light_budget: int = 60
 ) -> Dictionary:
-	return _adaptive_population.update_relevance_focus(
+	var result: Dictionary = _adaptive_population.update_relevance_focus(
 		player_place_id, socially_relevant_light_ids, light_budget
 	)
+	if bool(result.get("ok", false)):
+		_record_command("UPDATE_FOCUS", {
+			"player_place_id": player_place_id,
+			"socially_relevant_light_ids": socially_relevant_light_ids.duplicate(),
+			"light_budget": light_budget,
+		})
+	return result
 
 
 func promote_light_agent_to_persistent(
 	agent_id: int, reason: String = "PLAYER_RELEVANCE"
 ) -> Dictionary:
-	return _adaptive_population.promote_to_persistent(agent_id, reason)
+	var result: Dictionary = _adaptive_population.promote_to_persistent(agent_id, reason)
+	if bool(result.get("ok", false)):
+		_record_command("PROMOTE", {"agent_id": agent_id, "reason": reason})
+	return result
 
 
 func activate_light_agent_as_person(
@@ -275,6 +326,7 @@ func activate_light_agent_as_person(
 		for fact_id: int in _district_opportunity_fact_ids:
 			_add_knowledge(agent_id, fact_id, 0.85, agent_id, 0.70)
 		_lazy_history.register_person(agent_id, tick, agent)
+	_record_command("ACTIVATE_PERSON", {"agent_id": agent_id, "reason": reason})
 	return {
 		"ok": true,
 		"person_id": agent_id,
@@ -332,6 +384,9 @@ func get_persistent_background_history(
 			0.55, 0.25, 0.15, [fact_id] as Array[int]
 		))
 		_next_event_id += 1
+	_record_command("MATERIALIZE_HISTORY", {
+		"person_id": person_id, "observer_id": observer_id,
+	})
 	return result
 
 
@@ -346,11 +401,19 @@ func validate_lazy_histories() -> Array[String]:
 func release_adaptive_persistent(
 	agent_id: int, keep_as_light_agent: bool = false
 ) -> Dictionary:
-	return _adaptive_population.release_persistent(agent_id, keep_as_light_agent)
+	var result: Dictionary = _adaptive_population.release_persistent(agent_id, keep_as_light_agent)
+	if bool(result.get("ok", false)):
+		_record_command("RELEASE_PERSISTENT", {
+			"agent_id": agent_id, "keep_as_light_agent": keep_as_light_agent,
+		})
+	return result
 
 
 func coarsen_light_agent(agent_id: int) -> Dictionary:
-	return _adaptive_population.coarsen(agent_id)
+	var result: Dictionary = _adaptive_population.coarsen(agent_id)
+	if bool(result.get("ok", false)):
+		_record_command("COARSEN", {"agent_id": agent_id})
+	return result
 
 
 func get_light_agent_tier(agent_id: int) -> String:
@@ -368,6 +431,7 @@ func get_district_social_fields() -> Dictionary:
 func apply_district_field_shock(shock: Dictionary) -> Dictionary:
 	var result: Dictionary = _district_fields.apply_shock(shock)
 	_light_population.set_social_field_influence(result)
+	_record_command("FIELD_SHOCK", {"shock": shock.duplicate(true)})
 	return result
 
 
@@ -653,6 +717,13 @@ func _player_news_item(observer_id: int, event: RefCounted) -> Dictionary:
 				event.timestamp, "ACTIVITY", "Совместное занятие",
 				"Время проведено вместе с %s." % get_person_name(person_id)
 			)
+		"entered_public_place":
+			if not involves_observer or not _places.has(event.location_id):
+				return {}
+			return _news_item(
+				event.timestamp, "PLACE", "Новое место",
+				"Вы пришли: %s." % str(_places[event.location_id].display_name)
+			)
 		_:
 			return {}
 
@@ -759,6 +830,9 @@ func introduce_people(first_person_id: int, second_person_id: int) -> Dictionary
 		context, [], effects
 	)
 	_record_conversation(first_person_id, second_person_id, "IntroduceSelf", communicative_act, [])
+	_record_command("INTRODUCE", {
+		"first_person_id": first_person_id, "second_person_id": second_person_id,
+	})
 	return {
 		"ok": true,
 		"first_name": get_person_name(first_person_id),
@@ -1021,6 +1095,7 @@ func attempt_enter_aurora(person_id: int) -> Dictionary:
 		[] as Array[int], 1, tick, 0.8, 0.4, 0.2, access_fact_ids
 	))
 	_next_event_id += 1
+	_record_command("ENTER_AURORA", {"person_id": person_id})
 	return {"ok": true, "act": "ENTER_PLACE", "goal": get_goal_state(person_id)}
 
 
@@ -1189,6 +1264,12 @@ func perform_social_action(
 		affected_fact_ids
 	))
 	_next_event_id += 1
+	_record_command("SOCIAL_ACTION", {
+		"action_type": action_type,
+		"actor_id": actor_id,
+		"target_id": target_id,
+		"context": context.duplicate(true),
+	})
 
 	return {
 		"ok": true,
@@ -1622,6 +1703,9 @@ func _build_aurora_scenario() -> void:
 	_add_place(1, "Aurora Office", "office")
 	_add_place(2, "Corner Cafe", "cafe")
 	_add_place(3, "Player Apartment", "apartment")
+	_add_place(4, "District Park", "park")
+	_add_place(5, "Shopping Quarter", "retail")
+	_add_place(6, "Community Center", "community")
 	_add_organization(1, "Aurora", "company")
 	_add_organization(2, "Corner Cafe", "business")
 	_add_person(1, "Player", "independent", 3, 0, true)
@@ -2087,3 +2171,121 @@ func _next_random_int() -> int:
 
 func _next_unit_float() -> float:
 	return float(_next_random_int()) / float(_LCG_MASK)
+
+
+func export_save_data() -> Dictionary:
+	var state: Dictionary = snapshot()
+	var adaptive: Dictionary = get_adaptive_population_snapshot()
+	return {
+		"format": "AURORA_SIMULATION_COMMAND_LOG",
+		"version": 1,
+		"seed": seed,
+		"commands": _command_log.duplicate(true),
+		"integrity": {
+			"tick": tick,
+			"checksum": str(state.checksum),
+			"light_population_checksum": str(state.light_population_checksum),
+			"event_count": int(state.event_count),
+			"fact_count": int(state.fact_count),
+			"knowledge_edge_count": int(state.knowledge_edge_count),
+			"adaptive_transition_count": int(adaptive.transition_count),
+		},
+	}
+
+
+static func create_from_save_data(data: Dictionary) -> RefCounted:
+	if str(data.get("format", "")) != "AURORA_SIMULATION_COMMAND_LOG" or (
+		int(data.get("version", 0)) != 1
+	):
+		return null
+	var restored := SimulationWorld.new(int(data.get("seed", 0)))
+	restored._is_replaying = true
+	var saved_commands: Array[Dictionary] = []
+	for value: Variant in data.get("commands", []):
+		if not value is Dictionary:
+			restored._is_replaying = false
+			return null
+		var command: Dictionary = value
+		if not restored._replay_command(command):
+			restored._is_replaying = false
+			return null
+		saved_commands.append(command.duplicate(true))
+	restored._is_replaying = false
+	restored._command_log = saved_commands
+	var expected: Dictionary = data.get("integrity", {})
+	var actual: Dictionary = restored.snapshot()
+	var adaptive: Dictionary = restored.get_adaptive_population_snapshot()
+	if int(expected.get("tick", -1)) != int(actual.tick) or (
+		str(expected.get("checksum", "")) != str(actual.checksum)
+	) or str(expected.get("light_population_checksum", "")) != str(
+		actual.light_population_checksum
+	) or int(expected.get("event_count", -1)) != int(actual.event_count) or (
+		int(expected.get("fact_count", -1)) != int(actual.fact_count)
+	) or int(expected.get("knowledge_edge_count", -1)) != int(
+		actual.knowledge_edge_count
+	) or int(expected.get("adaptive_transition_count", -1)) != int(
+		adaptive.transition_count
+	):
+		return null
+	return restored
+
+
+func _record_command(operation: String, arguments: Dictionary) -> void:
+	if _is_replaying:
+		return
+	if operation == "ADVANCE" and not _command_log.is_empty() and (
+		str(_command_log.back().op) == "ADVANCE"
+	):
+		var previous: Dictionary = _command_log.back()
+		previous.args.ticks = int(previous.args.ticks) + int(arguments.ticks)
+		_command_log[_command_log.size() - 1] = previous
+		return
+	_command_log.append({"op": operation, "args": arguments.duplicate(true)})
+
+
+func _replay_command(command: Dictionary) -> bool:
+	var operation := str(command.get("op", ""))
+	var args: Dictionary = command.get("args", {})
+	var result: Dictionary = {"ok": true}
+	match operation:
+		"ADVANCE":
+			advance(int(args.get("ticks", 0)))
+		"VISIT_PLACE":
+			result = visit_public_place(int(args.person_id), int(args.place_id))
+		"REFINE_NEIGHBORHOOD":
+			result = refine_light_neighborhood(
+				int(args.anchor_agent_id), int(args.max_depth), int(args.limit)
+			)
+		"REFINE_ALL":
+			result = refine_all_light_agents()
+		"UPDATE_FOCUS":
+			result = update_adaptive_focus(
+				int(args.player_place_id), args.get("socially_relevant_light_ids", []),
+				int(args.light_budget)
+			)
+		"PROMOTE":
+			result = promote_light_agent_to_persistent(int(args.agent_id), str(args.reason))
+		"ACTIVATE_PERSON":
+			result = activate_light_agent_as_person(int(args.agent_id), str(args.reason))
+		"MATERIALIZE_HISTORY":
+			get_persistent_background_history(int(args.person_id), int(args.observer_id))
+		"RELEASE_PERSISTENT":
+			result = release_adaptive_persistent(
+				int(args.agent_id), bool(args.keep_as_light_agent)
+			)
+		"COARSEN":
+			result = coarsen_light_agent(int(args.agent_id))
+		"FIELD_SHOCK":
+			apply_district_field_shock(args.get("shock", {}))
+		"INTRODUCE":
+			result = introduce_people(int(args.first_person_id), int(args.second_person_id))
+		"ENTER_AURORA":
+			result = attempt_enter_aurora(int(args.person_id))
+		"SOCIAL_ACTION":
+			result = perform_social_action(
+				str(args.action_type), int(args.actor_id), int(args.target_id),
+				args.get("context", {})
+			)
+		_:
+			return false
+	return bool(result.get("ok", true))
