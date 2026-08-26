@@ -167,6 +167,7 @@ func _state(
 		"duration_ticks": spec.duration_ticks,
 		"money_cost_cents": spec.money_cost_cents,
 		"min_participants": spec.min_participants,
+		"activity_tags": spec.tags.duplicate(),
 	}
 
 

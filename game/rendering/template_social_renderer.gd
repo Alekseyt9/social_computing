@@ -71,6 +71,16 @@ static func _effect_clause(effect: Dictionary) -> String:
 			return "Я приму твою помощь и запомню это."
 		"ACTIVITY_SHARED":
 			return "Хорошо, давай вместе: %s." % str(effect.get("activity_label", "это дело"))
+		"ACTIVITY_INVITATION_CREATED":
+			return "Хорошо, договорились вместе: %s." % str(effect.get("activity_label", "это занятие"))
+		"ACTIVITY_ASSISTED":
+			return "Спасибо, с твоей помощью стало легче: %s." % str(effect.get("activity_label", "это дело"))
+		"ACTIVITY_OBSERVED":
+			return "Хорошо, можешь посмотреть, как я этим занимаюсь."
+		"ACTIVITY_HINDERED":
+			return "Ты действительно помешал моему занятию, и это не останется без последствий."
+		"ACTIVITY_INTERRUPTED":
+			return "Хорошо, я прервусь и освобожу место."
 		"TASK_CREATED":
 			return "Тогда поговори с %s — это поможет с моей текущей потребностью." % str(effect.get("counterpart_name", "нужным человеком"))
 		"TASK_COMPLETED":

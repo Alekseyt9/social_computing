@@ -16,6 +16,16 @@ static func button_label(action: Dictionary) -> String:
 			return "Предложить помощь"
 		"JoinActivity":
 			return _activity_button(str(context.get("activity", "")))
+		"InviteToActivity":
+			return "Предложить заняться этим вместе"
+		"AssistActivity":
+			return "Помочь с занятием"
+		"ObserveActivity":
+			return "Понаблюдать"
+		"HinderActivity":
+			return "Помешать"
+		"InterruptActivity":
+			return "Попросить прерваться"
 		"AskAbout":
 			return "Спросить: %s" % str(context.get("topic", "тема"))
 		"AskLocalNews":
@@ -58,6 +68,16 @@ static func player_line(action_type: String, context: Dictionary) -> String:
 			return _join(["Если", "тебе", "нужна", "помощь", "я", "могу", "помочь"], ".")
 		"JoinActivity":
 			return _join(["Можно", "присоединиться", "к", str(context.get("activity_label", "этому занятию"))], "?")
+		"InviteToActivity":
+			return _join(["Предлагаю", "заняться", str(context.get("activity_label", "этим")), "вместе"], ".")
+		"AssistActivity":
+			return _join(["Давай", "я", "помогу", "с", str(context.get("activity_label", "этим занятием"))], ".")
+		"ObserveActivity":
+			return _join(["Можно", "я", "посмотрю", "как", "ты", str(context.get("activity_label", "занимаешься этим"))], "?")
+		"HinderActivity":
+			return _join(["Я", "собираюсь", "помешать", "тебе", str(context.get("activity_label", "заниматься этим"))], ".")
+		"InterruptActivity":
+			return _join(["Можешь", "ненадолго", "прерваться"], "?")
 		"AskAbout":
 			return _join(["Ты", "можешь", "рассказать", "мне", "про", topic], "?")
 		"AskLocalNews":

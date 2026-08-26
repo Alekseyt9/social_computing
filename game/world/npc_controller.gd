@@ -8,6 +8,8 @@ var movement_paused := false
 var speed := 64.0
 var accent := Color("72c8d7")
 var role_hint := "resident"
+var execution_phase := "PERFORM"
+var visual_action := "IDLE"
 
 var _target := Vector2.ZERO
 var _wait_time := 0.0
@@ -15,6 +17,7 @@ var _rng := RandomNumberGenerator.new()
 var _name_label: Label
 var _walk_phase := 0.0
 var _facing := Vector2.DOWN
+var _activity_anchor_active := false
 
 
 func setup(id: int, label_text: String, zone: Rect2, color: Color, role: String = "resident") -> void:
@@ -62,6 +65,26 @@ func set_movement_zone(zone: Rect2) -> void:
 	_pick_target()
 
 
+func set_activity_state(state: Dictionary) -> void:
+	execution_phase = str(state.get("execution_phase", "PERFORM"))
+	visual_action = str(state.get("visual_action", "IDLE"))
+	var spot_id := str(state.get("activity_spot_id", ""))
+	_activity_anchor_active = (
+		not spot_id.is_empty() and execution_phase in ["RESERVE", "PERFORM"]
+	)
+	if _activity_anchor_active:
+		var parts := spot_id.split("-S")
+		var spot_index := int(parts[1]) if parts.size() > 1 else 0
+		var column := posmod(spot_index, 8)
+		var row := posmod(int(spot_index / 8), 12)
+		_target = Vector2(
+			movement_zone.position.x + (float(column) + 0.5) * movement_zone.size.x / 8.0,
+			movement_zone.position.y + (float(row) + 0.5) * movement_zone.size.y / 12.0,
+		)
+	elif execution_phase in ["FINISH", "INTERRUPT"]:
+		_pick_target()
+
+
 func _physics_process(delta: float) -> void:
 	if movement_paused:
 		velocity = velocity.move_toward(Vector2.ZERO, 480.0 * delta)
@@ -71,6 +94,11 @@ func _physics_process(delta: float) -> void:
 		_wait_time -= delta
 		velocity = velocity.move_toward(Vector2.ZERO, 420.0 * delta)
 		move_and_slide()
+		return
+	if _activity_anchor_active and global_position.distance_to(_target) < 8.0:
+		velocity = velocity.move_toward(Vector2.ZERO, 480.0 * delta)
+		move_and_slide()
+		queue_redraw()
 		return
 	var direction := global_position.direction_to(_target)
 	if global_position.distance_to(_target) < 12.0:
@@ -110,6 +138,8 @@ func _draw() -> void:
 	draw_circle(Vector2(-3, -6 - bob) + face_offset, 1.3, Color("17242a"))
 	draw_circle(Vector2(3, -6 - bob) + face_offset, 1.3, Color("17242a"))
 	_draw_role_marker(Vector2(0, -bob))
+	if _activity_anchor_active:
+		draw_arc(Vector2(0, 17), 5.0, 0.0, TAU, 10, accent.lightened(0.4), 1.5)
 
 
 func _draw_role_marker(origin: Vector2) -> void:

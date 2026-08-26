@@ -67,6 +67,14 @@ func sync_from_simulation() -> void:
 		state["retiring"] = not refined.has(agent_id)
 		state["accent"] = _agent_color(view)
 		state["activity"] = str(view.current_activity)
+		state["execution_phase"] = str(view.get("execution_phase", "PERFORM"))
+		state["phase_label"] = str(view.get("phase_label", ""))
+		state["activity_spot_id"] = str(view.get("activity_spot_id", ""))
+		state["visual_action"] = str(view.get("visual_action", "IDLE"))
+		if not bool(state.get("traveling", false)) and not str(state.activity_spot_id).is_empty():
+			state["target"] = _activity_spot_point(
+				str(state.activity_spot_id), get_place_zone(int(state.place_id))
+			)
 		if bool(state.retiring) and not bool(state.traveling):
 			_citizens.erase(agent_id)
 		else:
@@ -105,11 +113,19 @@ func sync_from_simulation() -> void:
 			"phase": _unit(agent_id, 43) * TAU,
 			"activity": str(view.current_activity),
 			"activity_label": str(view.activity_label),
+			"execution_phase": str(view.get("execution_phase", "PERFORM")),
+			"phase_label": str(view.get("phase_label", "")),
+			"activity_spot_id": str(view.get("activity_spot_id", "")),
+			"visual_action": str(view.get("visual_action", "IDLE")),
 		}
 		if origin_place != place_id:
 			_begin_trip(agent_id, state, place_id, str(view.activity_label))
 		else:
-			state["target"] = _point_in_zone(agent_id, 29, origin_zone)
+			state["target"] = (
+				_activity_spot_point(str(state.activity_spot_id), origin_zone)
+				if not str(state.activity_spot_id).is_empty()
+				else _point_in_zone(agent_id, 29, origin_zone)
+			)
 		_citizens[agent_id] = state
 	queue_redraw()
 
@@ -156,6 +172,10 @@ func get_nearest_citizen(world_position: Vector2, max_distance: float) -> Dictio
 			"activity": str(state.get("activity", "")),
 			"activity_label": str(state.get("activity_label", "")),
 			"traveling": bool(state.get("traveling", false)),
+			"execution_phase": str(state.get("execution_phase", "PERFORM")),
+			"phase_label": str(state.get("phase_label", "")),
+			"activity_spot_id": str(state.get("activity_spot_id", "")),
+			"visual_action": str(state.get("visual_action", "IDLE")),
 		}
 	return nearest
 
@@ -199,10 +219,12 @@ func _process(delta: float) -> void:
 							agent_id, int(_motion_clock * 10.0) + agent_id, arrival_zone
 						)
 			else:
-				var zone: Rect2 = get_place_zone(int(state.place_id))
-				state["target"] = _point_in_zone(
-					agent_id, int(_motion_clock * 10.0) + agent_id, zone
-				)
+				var spot_id := str(state.get("activity_spot_id", ""))
+				if spot_id.is_empty():
+					var zone: Rect2 = get_place_zone(int(state.place_id))
+					state["target"] = _point_in_zone(
+						agent_id, int(_motion_clock * 10.0) + agent_id, zone
+					)
 		else:
 			var movement_speed := (
 				float(state.travel_speed) if bool(state.get("traveling", false))
@@ -230,6 +252,9 @@ func _draw() -> void:
 		draw_circle(point + Vector2(0, -7 + bob), 5.5, accent.lightened(0.18))
 		if bool(state.get("traveling", false)):
 			draw_rect(Rect2(point + Vector2(6, -1 + bob), Vector2(5, 8)), accent.lightened(0.35))
+		elif not str(state.get("activity_spot_id", "")).is_empty():
+			draw_arc(point + Vector2(0, 13), 4.0, 0.0, TAU, 10, accent.lightened(0.45), 1.5)
+			_draw_activity_mark(point + Vector2(12, -12 + bob), str(state.get("visual_action", "IDLE")), accent)
 
 
 func _begin_trip(
@@ -320,6 +345,31 @@ func _agent_color(view: Dictionary) -> Color:
 			return Color("c59563c8")
 		_:
 			return Color("8796a0b8")
+
+
+func _activity_spot_point(spot_id: String, zone: Rect2) -> Vector2:
+	var parts := spot_id.split("-S")
+	var spot_index := int(parts[1]) if parts.size() > 1 else 0
+	var columns := 8
+	var rows := 12
+	var column := posmod(spot_index, columns)
+	var row := posmod(int(spot_index / columns), rows)
+	return Vector2(
+		zone.position.x + (float(column) + 0.5) * zone.size.x / float(columns),
+		zone.position.y + (float(row) + 0.5) * zone.size.y / float(rows),
+	)
+
+
+func _draw_activity_mark(point: Vector2, action: String, color: Color) -> void:
+	draw_circle(point, 5.0, Color(0.06, 0.09, 0.11, 0.82))
+	if action in ["TALK", "HELP"]:
+		draw_circle(point, 2.2, color.lightened(0.35))
+	elif action in ["READ", "TYPE", "CRAFT", "BROWSE"]:
+		draw_rect(Rect2(point - Vector2(2.5, 2.0), Vector2(5.0, 4.0)), color.lightened(0.35))
+	elif action in ["EAT", "DRINK"]:
+		draw_line(point + Vector2(-2, 2), point + Vector2(2, -2), color.lightened(0.35), 2.0)
+	else:
+		draw_arc(point, 2.5, 0.0, TAU, 8, color.lightened(0.35), 1.5)
 
 
 func _point_in_zone(agent_id: int, salt: int, zone: Rect2) -> Vector2:

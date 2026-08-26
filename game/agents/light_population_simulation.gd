@@ -9,6 +9,7 @@ const GpuPopulationBackendScript := preload("res://ms6/gpu_population_backend.gd
 const SpatialNeighborhoodBackendScript := preload("res://ms6/spatial_neighborhood_backend.gd")
 const CohortAggregateBackendScript := preload("res://ms6/cohort_aggregate_backend.gd")
 const ActivityUtilityModelScript := preload("res://activities/activity_utility_model.gd")
+const ActivityExecutionModelScript := preload("res://activities/activity_execution_model.gd")
 
 const FIRST_AGENT_ID := 10_000
 const DEFAULT_POPULATION := 1_200
@@ -49,6 +50,7 @@ var _gpu_backend: RefCounted
 var _spatial_backend: RefCounted
 var _cohort_backend: RefCounted
 var _activity_model: RefCounted
+var _activity_execution_model: RefCounted
 var _ms6_update_count := 0
 var _ms6_backend_status := "NOT_RUN"
 var _ms6_max_error := 0.0
@@ -65,6 +67,7 @@ var _ms6_spatial_gpu_disabled := false
 var _ms6_spatial_gpu_unavailable := false
 var _spatial_gossip_source_count := 0
 var _latest_cohort_summary: Dictionary = {}
+var _activity_interruptions: Dictionary = {}
 var _ms6_cohort_update_count := 0
 var _ms6_cohort_status := "NOT_RUN"
 var _ms6_cohort_max_error := 0.0
@@ -79,6 +82,7 @@ func _init(initial_seed: int, population_size: int = DEFAULT_POPULATION) -> void
 	_spatial_backend = SpatialNeighborhoodBackendScript.new()
 	_cohort_backend = CohortAggregateBackendScript.new()
 	_activity_model = ActivityUtilityModelScript.new()
+	_activity_execution_model = ActivityExecutionModelScript.new(_activity_model)
 	_build_groups()
 	_build_population(maxi(1, population_size))
 	_build_local_contacts()
@@ -89,6 +93,7 @@ func _init(initial_seed: int, population_size: int = DEFAULT_POPULATION) -> void
 func advance(ticks_to_advance: int) -> void:
 	for _index in range(maxi(0, ticks_to_advance)):
 		tick += 1
+		_expire_activity_interruptions()
 		if tick % GOSSIP_INTERVAL == 0:
 			if tick % MS6_SPATIAL_INTERVAL == 0:
 				run_ms6_spatial_batch(_ms6_prefer_gpu)
@@ -108,16 +113,31 @@ func snapshot() -> Dictionary:
 	var contact_edges := 0
 	var rumor_edges := 0
 	var activity_distribution: Dictionary = {}
+	var activity_phase_distribution: Dictionary = {}
+	var phase_sample_size := mini(120, _store.size())
+	var sample_index := 0
 	for agent_id: int in get_agent_ids():
-		var agent: Dictionary = get_agent_view(agent_id)
+		var agent: Dictionary = _store.get_agent(agent_id)
+		var activity_state: Dictionary = _activity_model.resolve(
+			agent, tick, _social_field_influence, false
+		)
 		if str(agent.employment_status) == "EMPLOYED":
 			employed += 1
-		var place_id := int(agent.current_place_id)
+		var place_id := int(activity_state.place_id)
 		location_counts[place_id] = int(location_counts.get(place_id, 0)) + 1
 		contact_edges += agent.local_contact_ids.size()
 		rumor_edges += agent.rumor_ids.size()
-		var activity_id := str(agent.current_activity)
+		var activity_id := str(activity_state.activity)
 		activity_distribution[activity_id] = int(activity_distribution.get(activity_id, 0)) + 1
+		if sample_index < phase_sample_size:
+			var execution: Dictionary = _activity_execution_model.resolve(
+				agent, tick, _social_field_influence, false
+			)
+			var execution_phase := str(execution.execution_phase)
+			activity_phase_distribution[execution_phase] = int(
+				activity_phase_distribution.get(execution_phase, 0)
+			) + 1
+		sample_index += 1
 	var total_money := _total_money_cents()
 	return {
 		"tick": tick,
@@ -145,6 +165,10 @@ func snapshot() -> Dictionary:
 			"catalog_size": _activity_model.get_activity_ids().size(),
 			"decision_interval_ticks": 12,
 			"distribution": activity_distribution,
+			"phase_sample_size": phase_sample_size,
+			"phase_sample_distribution": activity_phase_distribution,
+			"lifecycle": "TRAVEL_RESERVE_PERFORM_FINISH_INTERRUPT",
+			"active_interruptions": _activity_interruptions.size(),
 		},
 		"location_counts": location_counts,
 		"checksum": "%08x" % (
@@ -447,12 +471,17 @@ func get_agent_view(agent_id: int) -> Dictionary:
 	var agent: Dictionary = _store.get_agent(agent_id)
 	if agent.is_empty():
 		return agent
-	var schedule_state: Dictionary = _activity_model.resolve(
-		agent, tick, _social_field_influence, false
-	)
+	var schedule_state: Dictionary = _resolve_activity_execution(agent, tick, false)
 	agent["current_place_id"] = int(schedule_state.place_id)
 	agent["current_activity"] = str(schedule_state.activity)
 	agent["activity_label"] = str(schedule_state.activity_label)
+	for key: String in [
+		"execution_phase", "phase_label", "phase_progress", "origin_place_id",
+		"destination_place_id", "physical_place_id", "reservation_status",
+		"activity_spot_id", "reservation_token", "spot_capacity", "is_interactable",
+		"interrupted", "visual_action", "plan_started_tick", "plan_ends_tick",
+	]:
+		agent[key] = schedule_state.get(key)
 	return agent
 
 
@@ -460,9 +489,7 @@ func get_agent_schedule_state(agent_id: int, at_tick: int) -> Dictionary:
 	var agent: Dictionary = _store.get_agent(agent_id)
 	if agent.is_empty():
 		return {}
-	var state: Dictionary = _activity_model.resolve(agent, at_tick, _social_field_influence, true)
-	state["tick"] = at_tick
-	return state
+	return _resolve_activity_execution(agent, at_tick, true)
 
 
 func get_agent_ids() -> Array[int]:
@@ -505,6 +532,12 @@ func resolve_contextual_activity(agent_id: int, activity: String) -> Dictionary:
 			"ok": false,
 			"error": "ACTIVITY_CHANGED",
 			"current_activity": str(agent.current_activity),
+		}
+	if not bool(agent.get("is_interactable", false)):
+		return {
+			"ok": false,
+			"error": "ACTIVITY_NOT_PERFORMING",
+			"execution_phase": str(agent.get("execution_phase", "")),
 		}
 	var money_delta := 0
 	var transfer_amount := 0
@@ -551,7 +584,92 @@ func resolve_contextual_activity(agent_id: int, activity: String) -> Dictionary:
 		"transfer_amount_cents": transfer_amount,
 		"stress_delta": spec.stress_delta if spec != null else 0.0,
 		"activity_delta": spec.activity_delta if spec != null else 0.0,
+		"execution_phase": str(agent.execution_phase),
+		"activity_spot_id": str(agent.activity_spot_id),
 	}
+
+
+func apply_activity_interaction(agent_id: int, interaction_type: String) -> Dictionary:
+	var agent: Dictionary = _store.get_agent(agent_id)
+	if agent.is_empty():
+		return {"ok": false, "error": "UNKNOWN_LIGHT_AGENT"}
+	var execution: Dictionary = _resolve_activity_execution(agent, tick, false)
+	if str(execution.execution_phase) != "PERFORM":
+		return {
+			"ok": false,
+			"error": "ACTIVITY_NOT_PERFORMING",
+			"execution_phase": str(execution.execution_phase),
+		}
+	var stress_delta := 0.0
+	var activity_delta := 0.0
+	match interaction_type:
+		"ASSIST":
+			stress_delta = -0.045
+			activity_delta = 0.035
+		"HINDER":
+			stress_delta = 0.075
+			activity_delta = -0.050
+		"INTERRUPT":
+			stress_delta = 0.025
+			activity_delta = -0.020
+			_activity_interruptions[agent_id] = {
+				"plan_started_tick": int(execution.plan_started_tick),
+				"until_tick": int(execution.plan_ends_tick),
+				"activity": str(execution.activity),
+			}
+		"OBSERVE", "INVITE":
+			pass
+		_:
+			return {"ok": false, "error": "UNKNOWN_ACTIVITY_INTERACTION"}
+	if stress_delta != 0.0 or activity_delta != 0.0:
+		agent["stress"] = clampf(float(agent.get("stress", 0.2)) + stress_delta, 0.0, 1.0)
+		agent["activity_level"] = clampf(
+			float(agent.get("activity_level", 0.5)) + activity_delta, 0.0, 1.0
+		)
+		_store.update_agent(agent)
+	return {
+		"ok": true,
+		"agent_id": agent_id,
+		"interaction": interaction_type,
+		"activity": str(execution.activity),
+		"activity_label": str(execution.activity_label),
+		"place_id": int(execution.place_id),
+		"activity_spot_id": str(execution.activity_spot_id),
+		"stress_delta": stress_delta,
+		"activity_delta": activity_delta,
+		"interrupted": interaction_type == "INTERRUPT",
+	}
+
+
+func _resolve_activity_execution(
+	agent: Dictionary, at_tick: int, include_explanation: bool
+) -> Dictionary:
+	var state: Dictionary = _activity_execution_model.resolve(
+		agent, at_tick, _social_field_influence, include_explanation
+	)
+	var interruption: Dictionary = _activity_interruptions.get(int(agent.id), {})
+	if interruption.is_empty() or at_tick < int(interruption.plan_started_tick) or (
+		at_tick >= int(interruption.until_tick)
+	) or int(state.plan_started_tick) != int(interruption.plan_started_tick):
+		return state
+	state["execution_phase"] = "INTERRUPT"
+	state["phase_label"] = "прерывает занятие"
+	state["phase_progress"] = 1.0
+	state["reservation_status"] = "RELEASED"
+	state["activity_spot_id"] = ""
+	state["reservation_token"] = ""
+	state["is_interactable"] = false
+	state["interrupted"] = true
+	state["visual_action"] = "LEAVE_SPOT"
+	return state
+
+
+func _expire_activity_interruptions() -> void:
+	for value: Variant in _activity_interruptions.keys():
+		var agent_id := int(value)
+		var interruption: Dictionary = _activity_interruptions[agent_id]
+		if tick >= int(interruption.get("until_tick", tick)):
+			_activity_interruptions.erase(agent_id)
 
 
 func validate() -> Array[String]:

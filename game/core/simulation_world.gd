@@ -28,6 +28,10 @@ const TASK_OPERATORS := [
 	"GatherInformation", "DeliverMessage", "OfferSupport",
 	"VerifySituation", "CoordinateResource",
 ]
+const ACTIVITY_ACTIONS := [
+	"InviteToActivity", "JoinActivity", "AssistActivity",
+	"ObserveActivity", "HinderActivity", "InterruptActivity",
+]
 
 var seed: int
 var tick: int = 0
@@ -70,6 +74,7 @@ var _is_replaying: bool = false
 var _district_project_contributions: Dictionary = {}
 var _reputation_by_person: Dictionary = {}
 var _affiliations_by_person: Dictionary = {}
+var _activity_invitations: Array[Dictionary] = []
 
 const RESIDENT_FIRST_NAMES := [
 	"Алексей", "Анна", "Борис", "Вера", "Глеб", "Дарья", "Егор", "Жанна",
@@ -144,6 +149,7 @@ func snapshot() -> Dictionary:
 		"district_field_update_count": int(field_snapshot.get("update_count", 0)),
 		"district_project_contribution_count": _district_project_contributions.size(),
 		"player_reputation": float(_reputation_by_person.get(player_id, 0.0)),
+		"activity_invitation_count": _activity_invitations.size(),
 	}
 
 
@@ -1027,15 +1033,17 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 			})
 	var activity: Dictionary = get_person_activity_view(target_id)
 	if not activity.is_empty():
-		actions.append({
-			"type": "JoinActivity",
-			"context": {
-				"topic": str(activity.activity_label),
-				"activity": str(activity.activity),
-				"activity_label": str(activity.activity_label),
-				"place_id": int(activity.place_id),
-			},
-		})
+		var activity_context := _activity_action_context(activity)
+		var phase := str(activity.execution_phase)
+		if phase in ["RESERVE", "PERFORM"]:
+			actions.append({"type": "InviteToActivity", "context": activity_context.duplicate(true)})
+		if phase == "PERFORM":
+			actions.append({"type": "JoinActivity", "context": activity_context.duplicate(true)})
+			if _activity_can_be_assisted(str(activity.activity)):
+				actions.append({"type": "AssistActivity", "context": activity_context.duplicate(true)})
+			actions.append({"type": "ObserveActivity", "context": activity_context.duplicate(true)})
+			actions.append({"type": "HinderActivity", "context": activity_context.duplicate(true)})
+			actions.append({"type": "InterruptActivity", "context": activity_context.duplicate(true)})
 
 	actions.append({"type": "BuildRapport", "context": {"topic": "повседневные дела"}})
 	if not _has_active_task_from(actor_id, target_id):
@@ -1084,6 +1092,28 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 			},
 		})
 	return actions
+
+
+func _activity_action_context(activity: Dictionary) -> Dictionary:
+	return {
+		"topic": str(activity.activity_label),
+		"activity": str(activity.activity),
+		"activity_label": str(activity.activity_label),
+		"activity_tags": activity.get("activity_tags", []).duplicate(),
+		"place_id": int(activity.place_id),
+		"execution_phase": str(activity.execution_phase),
+		"activity_spot_id": str(activity.activity_spot_id),
+		"visual_action": str(activity.get("visual_action", "IDLE")),
+		"plan_started_tick": int(activity.plan_started_tick),
+		"plan_ends_tick": int(activity.plan_ends_tick),
+	}
+
+
+func _activity_can_be_assisted(activity: String) -> bool:
+	return activity in [
+		"WORK", "TEAMWORK", "ERRANDS", "COMMUNITY", "HEALTH", "CRAFT",
+		"JOB_SEARCH", "STUDY",
+	]
 
 
 func get_relationship_state(source_person_id: int, target_person_id: int) -> Dictionary:
@@ -1195,9 +1225,9 @@ func perform_social_action(
 	if action_type == "IntroduceSelf":
 		return introduce_people(actor_id, target_id)
 	if action_type not in [
-		"BuildRapport", "OfferHelp", "JoinActivity", "AskAbout", "AskLocalNews", "AskFavor",
+		"BuildRapport", "OfferHelp", "AskAbout", "AskLocalNews", "AskFavor",
 		"AskIntroduction", "AskInvitation", "RequestAccess", "AskDistrictSupport"
-	] and action_type not in TASK_OPERATORS:
+	] and action_type not in TASK_OPERATORS and action_type not in ACTIVITY_ACTIONS:
 		return {"ok": false, "error": "UNKNOWN_ACTION"}
 	if not _people.has(actor_id) or not _people.has(target_id):
 		return {"ok": false, "error": "UNKNOWN_PERSON"}
@@ -1217,7 +1247,7 @@ func perform_social_action(
 			return {"ok": false, "error": "TARGET_DOES_NOT_KNOW_SUBJECT"}
 		if not person_knows_fact(actor_id, target_subject_fact_id):
 			return {"ok": false, "error": "INTRODUCTION_SUBJECT_NOT_DISCOVERED"}
-	if action_type == "JoinActivity":
+	if action_type in ACTIVITY_ACTIONS:
 		var current_activity: Dictionary = get_person_activity_view(target_id)
 		if current_activity.is_empty():
 			return {"ok": false, "error": "TARGET_HAS_NO_CONTEXTUAL_ACTIVITY"}
@@ -1225,8 +1255,21 @@ func perform_social_action(
 			int(context.get("place_id", -1)) != int(current_activity.place_id)
 		):
 			return {"ok": false, "error": "ACTIVITY_CHANGED"}
+		if int(context.get("plan_started_tick", -1)) != int(current_activity.plan_started_tick):
+			return {"ok": false, "error": "ACTIVITY_PLAN_CHANGED"}
+		var current_phase := str(current_activity.execution_phase)
+		if action_type == "InviteToActivity" and current_phase not in ["RESERVE", "PERFORM"]:
+			return {"ok": false, "error": "ACTIVITY_PHASE_CHANGED"}
+		if action_type != "InviteToActivity" and current_phase != "PERFORM":
+			return {"ok": false, "error": "ACTIVITY_NOT_PERFORMING"}
+		if action_type == "AssistActivity" and not _activity_can_be_assisted(
+			str(current_activity.activity)
+		):
+			return {"ok": false, "error": "ACTIVITY_NOT_ASSISTABLE"}
 		context["activity_label"] = str(current_activity.activity_label)
 		context["topic"] = str(current_activity.activity_label)
+		context["execution_phase"] = current_phase
+		context["activity_spot_id"] = str(current_activity.activity_spot_id)
 
 	if action_type == "AskInvitation" and not _event_organizer_fact_ids.has(target_id):
 		return {"ok": false, "error": "TARGET_CANNOT_INVITE"}
@@ -1393,6 +1436,31 @@ func _apply_social_effects(
 	var count_key := _action_count_key(action_type, actor_id, target_id)
 	var previous_count := int(_action_counts.get(count_key, 0))
 	_action_counts[count_key] = previous_count + 1
+	if action_type == "HinderActivity":
+		var hinder_result: Dictionary = _light_population.apply_activity_interaction(
+			target_id, "HINDER"
+		)
+		if bool(hinder_result.get("ok", false)):
+			var hindered_target: RefCounted = _relationships[_relationship_key(target_id, actor_id)]
+			var hindering_actor: RefCounted = _relationships[_relationship_key(actor_id, target_id)]
+			hindered_target.resentment = clampf(hindered_target.resentment + 0.12, 0.0, 1.0)
+			hindered_target.trust = clampf(hindered_target.trust - 0.09, 0.0, 1.0)
+			hindering_actor.respect = clampf(hindering_actor.respect - 0.05, 0.0, 1.0)
+			_increase_reputation(actor_id, -0.045)
+			effects.append({
+				"type": "ACTIVITY_HINDERED",
+				"activity": str(hinder_result.activity),
+				"activity_label": str(hinder_result.activity_label),
+				"stress_delta": float(hinder_result.stress_delta),
+				"accepted": str(decision.decision) == "ACCEPT",
+			})
+			_events.append(SocialEventScript.new(
+				_next_event_id, "activity_hindered",
+				[actor_id] as Array[int], [target_id] as Array[int],
+				int(hinder_result.place_id), tick, 0.68, 0.72, 0.08,
+				[] as Array[int]
+			))
+			_next_event_id += 1
 	if decision.decision != "ACCEPT":
 		if decision.decision == "REFUSE" and _relationships.has(
 			_relationship_key(target_id, actor_id)
@@ -1433,6 +1501,31 @@ func _apply_social_effects(
 				"counterpart_name": get_person_name(int(task.counterpart_id)),
 				"need_type": str(task.need_type),
 			})
+	elif action_type == "InviteToActivity":
+		var invitation := {
+			"actor_id": actor_id,
+			"target_id": target_id,
+			"activity": str(context.get("activity", "")),
+			"activity_label": str(context.get("activity_label", "")),
+			"place_id": int(context.get("place_id", -1)),
+			"created_tick": tick,
+			"expires_tick": tick + 36,
+			"status": "ACCEPTED",
+		}
+		_activity_invitations.append(invitation)
+		target_to_actor.familiarity = clampf(target_to_actor.familiarity + 0.05, 0.0, 1.0)
+		effects.append({
+			"type": "ACTIVITY_INVITATION_CREATED",
+			"activity": str(invitation.activity),
+			"activity_label": str(invitation.activity_label),
+			"expires_tick": int(invitation.expires_tick),
+		})
+		_events.append(SocialEventScript.new(
+			_next_event_id, "activity_invitation_created",
+			[actor_id] as Array[int], [target_id] as Array[int],
+			int(invitation.place_id), tick, 0.40, 0.22, 0.02, [] as Array[int]
+		))
+		_next_event_id += 1
 	elif action_type == "JoinActivity":
 		var activity_result: Dictionary = _light_population.resolve_contextual_activity(
 			target_id, str(context.get("activity", ""))
@@ -1459,6 +1552,67 @@ func _apply_social_effects(
 			))
 			_next_event_id += 1
 			_increase_reputation(actor_id, 0.018)
+	elif action_type == "AssistActivity":
+		var assist_result: Dictionary = _light_population.apply_activity_interaction(
+			target_id, "ASSIST"
+		)
+		if bool(assist_result.get("ok", false)):
+			target_to_actor.trust = clampf(target_to_actor.trust + 0.09, 0.0, 1.0)
+			target_to_actor.obligation = clampf(target_to_actor.obligation + 0.07, 0.0, 1.0)
+			actor_to_target.respect = clampf(actor_to_target.respect + 0.05, 0.0, 1.0)
+			_reduce_need(target_id, _activity_need_type(str(assist_result.activity)), 0.07)
+			_increase_reputation(actor_id, 0.025)
+			effects.append({
+				"type": "ACTIVITY_ASSISTED",
+				"activity": str(assist_result.activity),
+				"activity_label": str(assist_result.activity_label),
+				"stress_delta": float(assist_result.stress_delta),
+				"activity_delta": float(assist_result.activity_delta),
+			})
+			_events.append(SocialEventScript.new(
+				_next_event_id, "activity_assisted",
+				[actor_id, target_id] as Array[int], [] as Array[int],
+				int(assist_result.place_id), tick, 0.52, 0.30, 0.02, [] as Array[int]
+			))
+			_next_event_id += 1
+	elif action_type == "ObserveActivity":
+		var observe_result: Dictionary = _light_population.apply_activity_interaction(
+			target_id, "OBSERVE"
+		)
+		if bool(observe_result.get("ok", false)):
+			target_to_actor.familiarity = clampf(target_to_actor.familiarity + 0.025, 0.0, 1.0)
+			actor_to_target.familiarity = clampf(actor_to_target.familiarity + 0.015, 0.0, 1.0)
+			effects.append({
+				"type": "ACTIVITY_OBSERVED",
+				"activity": str(observe_result.activity),
+				"activity_label": str(observe_result.activity_label),
+				"visual_action": str(context.get("visual_action", "")),
+			})
+			_events.append(SocialEventScript.new(
+				_next_event_id, "activity_observed",
+				[actor_id] as Array[int], [target_id] as Array[int],
+				int(observe_result.place_id), tick, 0.24, 0.12, 0.04, [] as Array[int]
+			))
+			_next_event_id += 1
+	elif action_type == "InterruptActivity":
+		var interrupt_result: Dictionary = _light_population.apply_activity_interaction(
+			target_id, "INTERRUPT"
+		)
+		if bool(interrupt_result.get("ok", false)):
+			target_to_actor.familiarity = clampf(target_to_actor.familiarity + 0.03, 0.0, 1.0)
+			target_to_actor.obligation = clampf(target_to_actor.obligation + 0.02, 0.0, 1.0)
+			effects.append({
+				"type": "ACTIVITY_INTERRUPTED",
+				"activity": str(interrupt_result.activity),
+				"activity_label": str(interrupt_result.activity_label),
+				"released_spot_id": str(interrupt_result.activity_spot_id),
+			})
+			_events.append(SocialEventScript.new(
+				_next_event_id, "activity_interrupted",
+				[actor_id] as Array[int], [target_id] as Array[int],
+				int(interrupt_result.place_id), tick, 0.48, 0.38, 0.03, [] as Array[int]
+			))
+			_next_event_id += 1
 	elif action_type == "AskIntroduction":
 		var subject_id := int(context.subject_person_id)
 		if not has_relationship(actor_id, subject_id):

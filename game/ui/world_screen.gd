@@ -354,6 +354,7 @@ func _sync_active_adaptive_npcs() -> void:
 			existing.visible = true
 			existing.set_physics_process(true)
 			existing.set_movement_zone(zone)
+			existing.set_activity_state(schedule)
 			continue
 		var citizen := {
 			"place_id": player_place,
@@ -1223,9 +1224,12 @@ func _update_nearby_npc() -> void:
 		_prompt_label.text = "[ E ]  Поговорить  ·  %s" % identity.name
 	elif not _nearby_light_citizen.is_empty():
 		var activity := str(_nearby_light_citizen.get("activity_label", ""))
+		var phase_label := str(_nearby_light_citizen.get("phase_label", ""))
 		_prompt_label.text = "[ E ]  Поговорить  ·  Житель района"
 		if not activity.is_empty():
 			_prompt_label.text += " · %s" % activity
+		if not phase_label.is_empty():
+			_prompt_label.text += " · %s" % phase_label
 	elif _near_aurora_entrance:
 		_prompt_label.text = "[ E ]  Войти в Aurora"
 	elif not _nearby_place.is_empty():
@@ -1264,6 +1268,9 @@ func _spawn_adaptive_npc(agent_id: int, citizen: Dictionary) -> CharacterBody2D:
 	npc.name = "AdaptiveNPC_%d" % agent_id
 	npc.position = citizen.position
 	add_child(npc)
+	var activity_state: Dictionary = world.get_person_activity_view(agent_id)
+	if not activity_state.is_empty():
+		npc.set_activity_state(activity_state)
 	_npc_by_id[agent_id] = npc
 	return npc
 
@@ -1286,6 +1293,7 @@ func _open_dialogue(npc: CharacterBody2D) -> void:
 	var activity: Dictionary = world.get_person_activity_view(npc.person_id)
 	if identity.known and not activity.is_empty():
 		_role_label.text += " · %s" % str(activity.activity_label)
+		_role_label.text += " · %s" % str(activity.get("phase_label", ""))
 	_status_label.text = "Решения принимает симуляция · текст: Groq или локальный шаблон"
 	_status_label.text += " · %s" % _relationship_signal(npc.person_id)
 	_clear_actions()
@@ -1423,6 +1431,7 @@ func _show_dialogue_response(response: String, source: String) -> void:
 	var activity: Dictionary = world.get_person_activity_view(_dialogue_npc.person_id)
 	if not activity.is_empty():
 		_role_label.text += " · %s" % str(activity.activity_label)
+		_role_label.text += " · %s" % str(activity.get("phase_label", ""))
 	_refresh_dialogue_actions()
 	_update_hud()
 	_refresh_debug_inspector()
@@ -1614,6 +1623,11 @@ func _show_effect_toast(effects: Array) -> void:
 			"ACCESS_GRANTED": message = "Получен новый способ доступа в Aurora"
 			"IDENTITY_EXCHANGED": message = "Новый человек добавлен в социальную карту"
 			"ACTIVITY_SHARED": message = "Вы провели время вместе · занятие повлияло на отношения"
+			"ACTIVITY_INVITATION_CREATED": message = "Создано приглашение к совместному занятию"
+			"ACTIVITY_ASSISTED": message = "Помощь снизила стресс и улучшила отношения"
+			"ACTIVITY_OBSERVED": message = "Вы наблюдали за занятием"
+			"ACTIVITY_HINDERED": message = "Помеха повысила стресс и испортила отношения"
+			"ACTIVITY_INTERRUPTED": message = "NPC прервал занятие и освободил место"
 		if not message.is_empty():
 			_toast_label.text = message
 			_toast_remaining = 3.2

@@ -573,6 +573,59 @@ The test requires all 16 activities and all eight district places to appear,
 checks equal-seed determinism and verifies that work/home obligations cannot be
 displaced by a higher free-time utility.
 
+### Activity execution lifecycle (D1.2)
+
+An activity is now an observable process rather than an instantaneous schedule
+label. Every calculated plan moves through `TRAVEL`, `RESERVE`, `PERFORM`, and a
+terminal `FINISH` or `INTERRUPT` phase. The execution state exposes its origin,
+destination and physical place, normalized phase progress, visual action,
+interaction availability, and a deterministic activity-spot reservation token.
+Reservations exist only while approaching or performing the action and are
+released at either terminal outcome.
+
+Visible aggregate and promoted NPCs now walk to the calculated spot and remain
+there while performing. The dialogue HUD shows the current phase, and the
+`JoinActivity` affordance is available only during `PERFORM`; Groq still only
+renders the response after the simulation has accepted the action.
+
+Run the one-day lifecycle regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/d1_activity_lifecycle_test.gd
+```
+
+It samples 120 agents on every tick, requires all five lifecycle outcomes,
+checks equal-seed determinism, stable reservations, physical travel and spot
+release, and verifies that non-performing activities cannot be joined.
+
+### Activity affordances (D2)
+
+Known adaptive NPCs now expose six activity actions calculated from their
+current plan and execution phase: invite, join, assist, observe, hinder and ask
+to interrupt. No action contains a scripted NPC outcome. Each request is
+evaluated by the shared `DecisionEngine` from relationship state, personality,
+district pressure, risk, cost and expected benefit; the renderer receives only
+the resulting decision and structured effects.
+
+Accepted invitations become canonical pending invitations for the next group-
+planning stage. Joining applies the existing conserved activity consequences,
+assistance lowers stress and improves activity progress, observation changes
+familiarity, and hindering raises stress and resentment even when the target
+refuses to tolerate it. An accepted interruption immediately releases the
+activity spot and removes activity affordances until the next calculated plan.
+All outcomes create social effects, and observable interactions create world
+events for later memory and gossip integration.
+
+Run the affordance regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/d2_activity_affordances_test.gd
+```
+
+The test requires all six operators, verifies their systemic effect families,
+relationship changes, canonical invitation storage, phase interruption and
+money conservation.
+
 ## Groq API
 
 Copy the example configuration and add your key only to the local `.env` file:

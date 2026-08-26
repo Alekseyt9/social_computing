@@ -24,11 +24,15 @@ func _run() -> void:
 		return
 	world.activate_light_agent_as_person(agent_id, "PLAYER_INTERACTION")
 	world.introduce_people(world.player_id, agent_id)
+	world.advance(4) # Travel/reservation complete; the activity is now interactable.
 	var action: Dictionary = {}
 	for candidate: Dictionary in world.get_available_social_actions(world.player_id, agent_id):
 		if str(candidate.type) == "JoinActivity":
 			action = candidate
 			break
+	if action.is_empty():
+		_fail("Contextual activity never reached its perform phase")
+		return
 	var action_result: Dictionary = world.perform_social_action(
 		"JoinActivity", world.player_id, agent_id, action.context
 	)

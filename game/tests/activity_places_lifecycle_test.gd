@@ -26,6 +26,9 @@ func _test_contextual_activity() -> bool:
 		return false
 	world.activate_light_agent_as_person(agent_id, "PLAYER_INTERACTION")
 	world.introduce_people(world.player_id, agent_id)
+	# At the decision boundary the NPC first travels and reserves a spot.
+	# Joining becomes available only once the modeled activity reaches PERFORM.
+	world.advance(4)
 	var actions: Array[Dictionary] = world.get_available_social_actions(
 		world.player_id, agent_id
 	)

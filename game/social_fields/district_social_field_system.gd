@@ -123,11 +123,16 @@ func apply_shock(shock: Dictionary) -> Dictionary:
 
 func record_social_outcome(action_type: String, decision: String) -> void:
 	if decision == "ACCEPT":
-		_social_contributions.trust += 0.002 if action_type in ["BuildRapport", "OfferHelp", "JoinActivity"] else 0.0005
-		_social_contributions.tension -= 0.001
+		_social_contributions.trust += 0.002 if action_type in [
+			"BuildRapport", "OfferHelp", "JoinActivity", "InviteToActivity", "AssistActivity"
+		] else 0.0005
+		_social_contributions.tension += 0.002 if action_type == "HinderActivity" else -0.001
 	elif decision == "REFUSE":
 		_social_contributions.tension += 0.001
 		_social_contributions.fear += 0.0004
+	if action_type == "HinderActivity":
+		_social_contributions.tension += 0.003
+		_social_contributions.fear += 0.001
 
 
 func snapshot() -> Dictionary:
