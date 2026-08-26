@@ -5,6 +5,9 @@ const INTERIOR_SIZE := Vector2(1400, 820)
 const ACTIVITY_ZONE := Rect2(95, 105, 1210, 590)
 const ENTRY_POSITION := Vector2(700, 730)
 const EXIT_POSITION := Vector2(700, 775)
+const SPOT_COLUMNS := 8
+const SPOT_ROWS := 12
+const PLACE_SPOT_CAPACITY := {2: 36, 5: 28, 6: 32, 7: 18, 8: 28}
 
 var place_id: int = -1
 var display_name: String = ""
@@ -63,6 +66,7 @@ func _draw() -> void:
 			_draw_workshop()
 		_:
 			_draw_generic()
+	_draw_activity_spots()
 	draw_rect(Rect2(630, 744, 140, 35), Color("131c20"))
 	draw_string(
 		ThemeDB.fallback_font, Vector2(648, 768), "ВЫХОД", HORIZONTAL_ALIGNMENT_CENTER,
@@ -118,6 +122,68 @@ func _draw_workshop() -> void:
 
 func _draw_generic() -> void:
 	draw_rect(Rect2(160, 160, 1080, 430), accent.darkened(0.55))
+
+
+func _draw_activity_spots() -> void:
+	var capacity := get_activity_spot_count()
+	for spot_index in range(capacity):
+		var point := get_activity_spot_local_position(spot_index)
+		draw_circle(point, 4.0, Color(accent, 0.24))
+		draw_arc(point, 7.0, 0.0, TAU, 12, Color(accent, 0.32), 1.0)
+	var legend_position := Vector2(1010, 92)
+	draw_rect(Rect2(legend_position - Vector2(12, 22), Vector2(300, 32)), Color("10181cbb"))
+	draw_circle(legend_position, 4.0, accent.lightened(0.18))
+	draw_string(
+		ThemeDB.fallback_font, legend_position + Vector2(14, 5),
+		"точки занятий · %d мест" % capacity,
+		HORIZONTAL_ALIGNMENT_LEFT, 250, 14, Color("c9d7d2")
+	)
+	for marker: Dictionary in _activity_area_markers():
+		var point: Vector2 = marker.position
+		draw_circle(point, 18.0, Color(accent, 0.12))
+		draw_arc(point, 18.0, 0.0, TAU, 20, Color(accent, 0.56), 1.5)
+		draw_string(
+			ThemeDB.fallback_font, point + Vector2(25, 5), str(marker.label),
+			HORIZONTAL_ALIGNMENT_LEFT, 180, 13, Color("d5dfda")
+		)
+
+
+func get_activity_spot_count() -> int:
+	return int(PLACE_SPOT_CAPACITY.get(place_id, 24))
+
+
+func get_activity_spot_local_position(spot_index: int) -> Vector2:
+	var column := posmod(spot_index, SPOT_COLUMNS)
+	var row := posmod(int(spot_index / SPOT_COLUMNS), SPOT_ROWS)
+	return Vector2(
+		ACTIVITY_ZONE.position.x + (float(column) + 0.5) * ACTIVITY_ZONE.size.x / float(SPOT_COLUMNS),
+		ACTIVITY_ZONE.position.y + (float(row) + 0.5) * ACTIVITY_ZONE.size.y / float(SPOT_ROWS),
+	)
+
+
+func _activity_area_markers() -> Array[Dictionary]:
+	return {
+		2: [
+			{"position": Vector2(220, 220), "label": "заказ / работа"},
+			{"position": Vector2(700, 520), "label": "еда / общение"},
+		],
+		5: [
+			{"position": Vector2(220, 650), "label": "касса"},
+			{"position": Vector2(880, 600), "label": "покупки"},
+		],
+		6: [
+			{"position": Vector2(230, 390), "label": "совместная работа"},
+			{"position": Vector2(700, 535), "label": "встреча"},
+		],
+		7: [
+			{"position": Vector2(700, 425), "label": "регистратура"},
+			{"position": Vector2(330, 590), "label": "ожидание"},
+		],
+		8: [
+			{"position": Vector2(260, 330), "label": "верстак"},
+			{"position": Vector2(820, 650), "label": "совместный проект"},
+		],
+	}.get(place_id, [])
 
 
 func _create_boundaries() -> void:

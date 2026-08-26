@@ -12,6 +12,7 @@ const AmbientCrowdLayerScript := preload("res://world/ambient_crowd_layer.gd")
 const PlaceInteriorScript := preload("res://world/place_interior.gd")
 const SaveGameServiceScript := preload("res://core/save_game_service.gd")
 const DistrictMinimapScript := preload("res://ui/district_minimap.gd")
+const ActivityStatusCardScript := preload("res://ui/activity_status_card.gd")
 
 const INTERACTION_DISTANCE := 92.0
 const INTERIOR_ORIGIN := Vector2(2600, 0)
@@ -77,6 +78,14 @@ var _role_label: Label
 var _conversation_label: Label
 var _action_row: HBoxContainer
 var _status_label: Label
+var _activity_card: PanelContainer
+var _plan_panel: PanelContainer
+var _plan_title_label: Label
+var _plan_details_label: Label
+var _plan_progress: ProgressBar
+var _conflict_confirm_overlay: PanelContainer
+var _conflict_confirm_label: Label
+var _pending_conflict_action: Dictionary = {}
 var _social_map_overlay: PanelContainer
 var _social_map_control: Control
 var _debug_overlay: PanelContainer
@@ -142,6 +151,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _save_menu_overlay != null and _save_menu_overlay.visible:
 			if event.keycode == KEY_ESCAPE:
 				_toggle_save_menu()
+			get_viewport().set_input_as_handled()
+			return
+		if _conflict_confirm_overlay != null and _conflict_confirm_overlay.visible:
+			if event.keycode == KEY_ESCAPE:
+				_cancel_conflict_action()
 			get_viewport().set_input_as_handled()
 			return
 		if _journal_overlay != null and _journal_overlay.visible:
@@ -466,8 +480,10 @@ func _build_hud() -> void:
 
 	_build_dialogue_panel(canvas)
 	_build_district_pulse(canvas)
+	_build_plan_panel(canvas)
 	_build_news_feed(canvas)
 	_build_toast(canvas)
+	_build_conflict_confirmation(canvas)
 	_build_save_menu(canvas)
 	_build_social_map(canvas)
 	_build_debug_inspector(canvas)
@@ -499,6 +515,83 @@ func _build_district_pulse(canvas: CanvasLayer) -> void:
 	_pulse_signals_label.add_theme_font_size_override("font_size", 12)
 	_pulse_signals_label.add_theme_color_override("font_color", Color("c7d2cd"))
 	box.add_child(_pulse_signals_label)
+
+
+func _build_plan_panel(canvas: CanvasLayer) -> void:
+	_plan_panel = PanelContainer.new()
+	_plan_panel.name = "JointPlanPanel"
+	_plan_panel.position = Vector2(22, 316)
+	_plan_panel.size = Vector2(460, 118)
+	_plan_panel.add_theme_stylebox_override(
+		"panel", _panel_style(Color("172128ed"), Color("927a4e"), 12)
+	)
+	_plan_panel.visible = false
+	canvas.add_child(_plan_panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	_plan_panel.add_child(box)
+	var caption := Label.new()
+	caption.text = "СОВМЕСТНЫЙ ПЛАН"
+	caption.add_theme_font_size_override("font_size", 12)
+	caption.add_theme_color_override("font_color", Color("efc979"))
+	box.add_child(caption)
+	_plan_title_label = Label.new()
+	_plan_title_label.add_theme_font_size_override("font_size", 16)
+	_plan_title_label.add_theme_color_override("font_color", Color("f0eee5"))
+	box.add_child(_plan_title_label)
+	_plan_details_label = Label.new()
+	_plan_details_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_plan_details_label.add_theme_font_size_override("font_size", 11)
+	_plan_details_label.add_theme_color_override("font_color", Color("bdc9c5"))
+	box.add_child(_plan_details_label)
+	_plan_progress = ProgressBar.new()
+	_plan_progress.custom_minimum_size = Vector2(0, 7)
+	_plan_progress.show_percentage = false
+	_plan_progress.add_theme_stylebox_override("background", _panel_style(Color("11191c"), Color("2d3c40"), 4))
+	_plan_progress.add_theme_stylebox_override("fill", _panel_style(Color("b9934d"), Color("e0bd73"), 4))
+	box.add_child(_plan_progress)
+
+
+func _build_conflict_confirmation(canvas: CanvasLayer) -> void:
+	_conflict_confirm_overlay = PanelContainer.new()
+	_conflict_confirm_overlay.name = "ActivityConflictConfirm"
+	_conflict_confirm_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_conflict_confirm_overlay.position = Vector2(-280, -105)
+	_conflict_confirm_overlay.size = Vector2(560, 210)
+	_conflict_confirm_overlay.add_theme_stylebox_override(
+		"panel", _panel_style(Color("21181afb"), Color("c56d63"), 15)
+	)
+	_conflict_confirm_overlay.visible = false
+	canvas.add_child(_conflict_confirm_overlay)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	_conflict_confirm_overlay.add_child(box)
+	var title := Label.new()
+	title.text = "КОНФЛИКТНОЕ ДЕЙСТВИЕ"
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color("ef9a8e"))
+	box.add_child(title)
+	_conflict_confirm_label = Label.new()
+	_conflict_confirm_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_conflict_confirm_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_conflict_confirm_label.add_theme_font_size_override("font_size", 15)
+	_conflict_confirm_label.add_theme_color_override("font_color", Color("eee7df"))
+	box.add_child(_conflict_confirm_label)
+	var actions := HBoxContainer.new()
+	actions.alignment = BoxContainer.ALIGNMENT_END
+	box.add_child(actions)
+	var cancel := Button.new()
+	cancel.text = "Отмена  [Esc]"
+	cancel.custom_minimum_size = Vector2(150, 42)
+	cancel.pressed.connect(_cancel_conflict_action)
+	_style_button(cancel, false)
+	actions.add_child(cancel)
+	var confirm := Button.new()
+	confirm.text = "Всё равно помешать"
+	confirm.custom_minimum_size = Vector2(190, 42)
+	confirm.pressed.connect(_confirm_conflict_action)
+	_style_conflict_button(confirm)
+	actions.add_child(confirm)
 
 
 func _build_news_feed(canvas: CanvasLayer) -> void:
@@ -905,6 +998,7 @@ func _gameplay_paused() -> bool:
 		or (_start_menu_overlay != null and _start_menu_overlay.visible)
 		or (_save_menu_overlay != null and _save_menu_overlay.visible)
 		or (_journal_overlay != null and _journal_overlay.visible)
+		or (_conflict_confirm_overlay != null and _conflict_confirm_overlay.visible)
 	)
 
 
@@ -1099,6 +1193,7 @@ func _sync_player_input() -> void:
 		or (_save_menu_overlay != null and _save_menu_overlay.visible)
 		or (_start_menu_overlay != null and _start_menu_overlay.visible)
 		or (_journal_overlay != null and _journal_overlay.visible)
+		or (_conflict_confirm_overlay != null and _conflict_confirm_overlay.visible)
 	)
 	if not player.input_enabled:
 		player.velocity = Vector2.ZERO
@@ -1123,8 +1218,8 @@ func _refresh_debug_inspector() -> void:
 func _build_dialogue_panel(canvas: CanvasLayer) -> void:
 	_dialogue_panel = PanelContainer.new()
 	_dialogue_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_dialogue_panel.position = Vector2(-475, -355)
-	_dialogue_panel.size = Vector2(950, 325)
+	_dialogue_panel.position = Vector2(-475, -430)
+	_dialogue_panel.size = Vector2(950, 400)
 	_dialogue_panel.add_theme_stylebox_override("panel", _panel_style(Color("10191ff5"), Color("65858d"), 16))
 	_dialogue_panel.visible = false
 	canvas.add_child(_dialogue_panel)
@@ -1158,8 +1253,10 @@ func _build_dialogue_panel(canvas: CanvasLayer) -> void:
 	top_row.add_child(close_button)
 	var separator := HSeparator.new()
 	content.add_child(separator)
+	_activity_card = ActivityStatusCardScript.new()
+	content.add_child(_activity_card)
 	_conversation_label = Label.new()
-	_conversation_label.custom_minimum_size = Vector2(0, 108)
+	_conversation_label.custom_minimum_size = Vector2(0, 92)
 	_conversation_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_conversation_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_conversation_label.add_theme_font_size_override("font_size", 17)
@@ -1291,6 +1388,7 @@ func _open_dialogue(npc: CharacterBody2D) -> void:
 	_speaker_label.text = identity.name
 	_role_label.text = identity.role if identity.known else "Вы ещё не знакомы"
 	var activity: Dictionary = world.get_person_activity_view(npc.person_id)
+	_activity_card.set_activity(activity)
 	if identity.known and not activity.is_empty():
 		_role_label.text += " · %s" % str(activity.activity_label)
 		_role_label.text += " · %s" % str(activity.get("phase_label", ""))
@@ -1321,6 +1419,9 @@ func _close_dialogue() -> void:
 		_dialogue_npc.movement_paused = false
 	_dialogue_npc = null
 	_dialogue_panel.visible = false
+	_pending_conflict_action = {}
+	if _conflict_confirm_overlay != null:
+		_conflict_confirm_overlay.visible = false
 	_pending_act = {}
 	_pending_fallback = ""
 	_pending_player_line = ""
@@ -1337,16 +1438,41 @@ func _refresh_dialogue_actions() -> void:
 	var actions: Array[Dictionary] = world.get_available_social_actions(
 		world.player_id, _dialogue_npc.person_id
 	)
+	actions.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		return _action_category_order(str(left.get("type", ""))) < _action_category_order(str(right.get("type", "")))
+	)
+	var last_category := ""
 	for index in range(actions.size()):
 		var action: Dictionary = actions[index]
+		var category := _action_category(str(action.get("type", "")))
+		if category != last_category:
+			_add_action_category_label(category)
+			last_category = category
 		_add_action_button(
 			SocialActionPresenterScript.button_label(action),
 			_perform_model_action.bind(action),
-			index == 0
+			index == 0,
+			category
 		)
 
 
 func _perform_model_action(action: Dictionary) -> void:
+	if _dialogue_npc == null or groq_client.is_busy():
+		return
+	if str(action.get("type", "")) == "HinderActivity":
+		_pending_conflict_action = action.duplicate(true)
+		_conflict_confirm_label.text = (
+			"Вы намеренно помешаете занятию «%s». Это повысит стресс персонажа, "
+			+ "ухудшит отношения и может изменить события района."
+		) % str(action.get("context", {}).get("activity_label", "текущее дело"))
+		_conflict_confirm_overlay.visible = true
+		_apply_motion_pause()
+		_sync_player_input()
+		return
+	_execute_model_action(action)
+
+
+func _execute_model_action(action: Dictionary) -> void:
 	if _dialogue_npc == null or groq_client.is_busy():
 		return
 	var action_type := str(action.get("type", ""))
@@ -1400,6 +1526,23 @@ func _perform_model_action(action: Dictionary) -> void:
 	_show_dialogue_response(result.template_response, "локальный шаблон")
 
 
+func _confirm_conflict_action() -> void:
+	var action := _pending_conflict_action.duplicate(true)
+	_pending_conflict_action = {}
+	_conflict_confirm_overlay.visible = false
+	_apply_motion_pause()
+	_sync_player_input()
+	if not action.is_empty():
+		_execute_model_action(action)
+
+
+func _cancel_conflict_action() -> void:
+	_pending_conflict_action = {}
+	_conflict_confirm_overlay.visible = false
+	_apply_motion_pause()
+	_sync_player_input()
+
+
 func _on_groq_response(raw_text: String) -> void:
 	var rendered := SocialRendererScript.sanitize_output(raw_text, _pending_act, _pending_fallback)
 	var source := "Groq" if rendered != _pending_fallback else "локальный шаблон (ответ Groq отклонён)"
@@ -1429,6 +1572,7 @@ func _show_dialogue_response(response: String, source: String) -> void:
 	_speaker_label.text = name
 	_role_label.text = world.get_person_role(_dialogue_npc.person_id)
 	var activity: Dictionary = world.get_person_activity_view(_dialogue_npc.person_id)
+	_activity_card.set_activity(activity)
 	if not activity.is_empty():
 		_role_label.text += " · %s" % str(activity.activity_label)
 		_role_label.text += " · %s" % str(activity.get("phase_label", ""))
@@ -1455,6 +1599,7 @@ func _open_aurora_entrance() -> void:
 	_dialogue_npc = null
 	_speaker_label.text = "Aurora"
 	_role_label.text = "Контроль доступа"
+	_activity_card.clear_activity()
 	_clear_actions()
 	if result.ok:
 		_conversation_label.text = "Пропуск подтверждён. Цель достигнута: вы вошли на закрытое мероприятие."
@@ -1470,14 +1615,31 @@ func _clear_actions() -> void:
 		child.queue_free()
 
 
-func _add_action_button(label_text: String, callback: Callable, primary: bool) -> void:
+func _add_action_button(
+	label_text: String, callback: Callable, primary: bool, category: String = "ОБЩЕНИЕ"
+) -> void:
 	var button := Button.new()
 	button.text = label_text
 	button.custom_minimum_size = Vector2(190, 42)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.pressed.connect(callback)
-	_style_button(button, primary)
+	_style_action_button(button, primary, category)
 	_action_row.add_child(button)
+
+
+func _add_action_category_label(category: String) -> void:
+	var label := Label.new()
+	label.text = category
+	label.custom_minimum_size = Vector2(100, 42)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_color_override(
+		"font_color", Color("8fd0a2") if category == "СОВМЕСТНО" else (
+			Color("e38d82") if category == "КОНФЛИКТ" else Color("8fbfc7")
+		)
+	)
+	_action_row.add_child(label)
 
 
 func _set_action_buttons_disabled(disabled: bool) -> void:
@@ -1504,7 +1666,9 @@ func _update_hud() -> void:
 		_objective_label.text += "\nПоручение: найти %s · %s" % [
 			str(task.counterpart_name), str(task.topic),
 		]
+	var plans: Array[Dictionary] = world.get_activity_plans_view(world.player_id)
 	_update_district_pulse()
+	_update_plan_panel(plans)
 	_update_news_feed()
 	_refresh_debug_inspector()
 	if _journal_overlay != null and _journal_overlay.visible:
@@ -1543,12 +1707,74 @@ func _refresh_journal() -> void:
 				str(task.requester_name), str(task.counterpart_name),
 				str(task.topic), int(task.deadline_tick),
 			])
+	lines.append("\n[color=#efcd88][font_size=18]СОВМЕСТНЫЕ ПЛАНЫ[/font_size][/color]")
+	if journal.activity_plans.is_empty():
+		lines.append("Совместных планов пока нет.")
+	else:
+		for plan: Dictionary in journal.activity_plans:
+			var participant_names := PackedStringArray()
+			for participant: Dictionary in plan.participants:
+				participant_names.append(str(participant.name))
+			lines.append("• %s · %s · тик %d · %s · %s" % [
+				str(plan.activity_label), str(plan.place_name), int(plan.start_tick),
+				_activity_plan_status_label(str(plan.status)), ", ".join(participant_names),
+			])
 	lines.append("\n[color=#efcd88][font_size=18]ЗНАКОМЫЕ И ИХ ДЕЛА[/font_size][/color]")
 	for contact: Dictionary in journal.contacts:
 		lines.append("• [b]%s[/b] · %s · %s · %s" % [
 			str(contact.name), str(contact.role), str(contact.relationship), str(contact.activity),
 		])
 	_journal_text.text = "\n".join(lines)
+
+
+func _activity_plan_status_label(status: String) -> String:
+	return {
+		"PLANNED": "запланировано",
+		"GATHERING": "участники собираются",
+		"ACTIVE": "идёт сейчас",
+		"COMPLETED": "выполнено",
+		"MISSED": "сорвано",
+		"CANCELLED": "отменено",
+	}.get(status, status.to_lower())
+
+
+func _update_plan_panel(plans: Array[Dictionary]) -> void:
+	if _plan_panel == null:
+		return
+	var active_plan: Dictionary = {}
+	for plan: Dictionary in plans:
+		if str(plan.get("status", "")) not in ["COMPLETED", "MISSED", "CANCELLED"]:
+			active_plan = plan
+			break
+	if active_plan.is_empty():
+		_plan_panel.visible = false
+		return
+	_plan_panel.visible = true
+	var status := str(active_plan.get("status", "PLANNED"))
+	_plan_title_label.text = "%s · %s" % [
+		str(active_plan.get("activity_label", "Совместное занятие")),
+		_activity_plan_status_label(status),
+	]
+	var participant_marks := PackedStringArray()
+	for participant: Dictionary in active_plan.get("participants", []):
+		participant_marks.append("✓ %s" % str(participant.name) if bool(participant.arrived) else "○ %s" % str(participant.name))
+	var start_tick := int(active_plan.get("start_tick", int(world.tick)))
+	var timing := (
+		"начало через %d т." % (start_tick - int(world.tick))
+		if int(world.tick) < start_tick else "идёт сейчас"
+	)
+	_plan_details_label.text = "%s · %s\n%s" % [
+		str(active_plan.get("place_name", "место не указано")), timing,
+		"  ".join(participant_marks),
+	]
+	var gathering_tick := int(active_plan.get("gathering_tick", start_tick))
+	var end_tick := maxi(start_tick + 1, int(active_plan.get("end_tick", start_tick + 1)))
+	_plan_progress.min_value = 0.0
+	_plan_progress.max_value = 100.0
+	_plan_progress.value = clampf(
+		float(int(world.tick) - gathering_tick) / float(maxi(1, end_tick - gathering_tick)),
+		0.0, 1.0
+	) * 100.0
 
 
 func _update_minimap() -> void:
@@ -1654,6 +1880,44 @@ func _style_button(button: Button, primary: bool) -> void:
 	button.add_theme_stylebox_override("pressed", _panel_style(background.darkened(0.12), border, 8))
 	button.add_theme_color_override("font_color", Color("eff6ef"))
 	button.add_theme_font_size_override("font_size", 14)
+
+
+func _style_action_button(button: Button, primary: bool, category: String) -> void:
+	var background := Color("356d73") if primary else Color("28383f")
+	var border := Color("80cbd1") if primary else Color("536c73")
+	if category == "СОВМЕСТНО":
+		background = Color("315d49")
+		border = Color("73b88a")
+	elif category == "КОНФЛИКТ":
+		background = Color("633a39")
+		border = Color("c36e66")
+	button.add_theme_stylebox_override("normal", _panel_style(background, border, 8))
+	button.add_theme_stylebox_override("hover", _panel_style(background.lightened(0.12), border.lightened(0.15), 8))
+	button.add_theme_stylebox_override("pressed", _panel_style(background.darkened(0.12), border, 8))
+	button.add_theme_color_override("font_color", Color("eff6ef"))
+	button.add_theme_font_size_override("font_size", 14)
+
+
+func _style_conflict_button(button: Button) -> void:
+	var background := Color("793f3b")
+	var border := Color("df8177")
+	button.add_theme_stylebox_override("normal", _panel_style(background, border, 8))
+	button.add_theme_stylebox_override("hover", _panel_style(background.lightened(0.12), border.lightened(0.12), 8))
+	button.add_theme_stylebox_override("pressed", _panel_style(background.darkened(0.12), border, 8))
+	button.add_theme_color_override("font_color", Color("fff0e9"))
+	button.add_theme_font_size_override("font_size", 14)
+
+
+func _action_category(action_type: String) -> String:
+	if action_type in ["InviteToActivity", "JoinActivity", "AssistActivity"]:
+		return "СОВМЕСТНО"
+	if action_type in ["HinderActivity", "InterruptActivity"]:
+		return "КОНФЛИКТ"
+	return "ОБЩЕНИЕ"
+
+
+func _action_category_order(action_type: String) -> int:
+	return {"СОВМЕСТНО": 0, "ОБЩЕНИЕ": 1, "КОНФЛИКТ": 2}[_action_category(action_type)]
 
 
 func _panel_style(background: Color, border: Color, radius: int) -> StyleBoxFlat:

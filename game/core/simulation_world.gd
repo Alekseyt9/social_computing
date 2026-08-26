@@ -20,6 +20,7 @@ const DistrictSocialFieldSystemScript := preload("res://social_fields/district_s
 const LazyHistorySystemScript := preload("res://history/lazy_history_system.gd")
 const CommunicativeActScript := preload("res://rendering/communicative_act.gd")
 const TemplateRendererScript := preload("res://rendering/template_social_renderer.gd")
+const ActivityPlanSystemScript := preload("res://activities/activity_plan_system.gd")
 
 const _LCG_MULTIPLIER := 1_103_515_245
 const _LCG_INCREMENT := 12_345
@@ -75,6 +76,7 @@ var _district_project_contributions: Dictionary = {}
 var _reputation_by_person: Dictionary = {}
 var _affiliations_by_person: Dictionary = {}
 var _activity_invitations: Array[Dictionary] = []
+var _activity_plans: RefCounted
 
 const RESIDENT_FIRST_NAMES := [
 	"Алексей", "Анна", "Борис", "Вера", "Глеб", "Дарья", "Егор", "Жанна",
@@ -100,6 +102,7 @@ func _init(initial_seed: int) -> void:
 	_district_fields = DistrictSocialFieldSystemScript.new(_light_population.snapshot())
 	_light_population.set_social_field_influence(_district_fields.snapshot())
 	_lazy_history = LazyHistorySystemScript.new()
+	_activity_plans = ActivityPlanSystemScript.new()
 
 
 func advance(ticks: int) -> Dictionary:
@@ -110,6 +113,7 @@ func advance(ticks: int) -> Dictionary:
 		_next_random_int()
 		tick += 1
 		_light_population.advance(1)
+		_advance_activity_plans()
 		_ingest_light_population_events()
 		if tick % 288 == 0:
 			_update_district_social_fields()
@@ -123,6 +127,7 @@ func snapshot() -> Dictionary:
 	var light_snapshot: Dictionary = _light_population.snapshot() if _light_population != null else {}
 	var adaptive_snapshot: Dictionary = _adaptive_population.snapshot() if _adaptive_population != null else {}
 	var field_snapshot: Dictionary = _district_fields.snapshot() if _district_fields != null else {}
+	var activity_plan_snapshot: Dictionary = _activity_plans.snapshot() if _activity_plans != null else {}
 	return {
 		"seed": seed,
 		"tick": tick,
@@ -150,6 +155,16 @@ func snapshot() -> Dictionary:
 		"district_project_contribution_count": _district_project_contributions.size(),
 		"player_reputation": float(_reputation_by_person.get(player_id, 0.0)),
 		"activity_invitation_count": _activity_invitations.size(),
+		"activity_plan_count": int(activity_plan_snapshot.get("count", 0)),
+		"active_activity_plan_count": int(
+			activity_plan_snapshot.get("status_counts", {}).get("ACTIVE", 0)
+		),
+		"completed_activity_plan_count": int(
+			activity_plan_snapshot.get("status_counts", {}).get("COMPLETED", 0)
+		),
+		"missed_activity_plan_count": int(
+			activity_plan_snapshot.get("status_counts", {}).get("MISSED", 0)
+		),
 	}
 
 
@@ -280,6 +295,7 @@ func get_player_journal_view(observer_id: int) -> Dictionary:
 		"primary_goal": get_goal_state(observer_id),
 		"district_project": get_district_project_state(observer_id),
 		"tasks": get_active_tasks_for(observer_id),
+		"activity_plans": get_activity_plans_view(observer_id),
 		"contacts": contacts,
 		"news": get_player_news_feed(observer_id, 8),
 		"reputation": float(_reputation_by_person.get(observer_id, 0.0)),
@@ -311,6 +327,38 @@ func get_person_activity_view(person_id: int) -> Dictionary:
 	if not _activated_adaptive_person_ids.has(person_id):
 		return {}
 	return _light_population.get_agent_schedule_state(person_id, tick)
+
+
+func get_activity_plans_view(observer_id: int) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for plan: Dictionary in _activity_plans.get_plans():
+		if observer_id not in plan.participant_ids:
+			continue
+		var visible := plan.duplicate(true)
+		var participants: Array[Dictionary] = []
+		for participant_id: int in plan.participant_ids:
+			participants.append({
+				"id": participant_id,
+				"name": (
+					get_person_name(participant_id)
+					if participant_id == observer_id or is_person_known_to(observer_id, participant_id)
+					else "Неизвестный участник"
+				),
+				"arrived": plan.arrival_ticks.has(participant_id),
+				"arrival_tick": int(plan.arrival_ticks.get(participant_id, -1)),
+			})
+		visible["participants"] = participants
+		visible["place_name"] = (
+			str(_places[int(plan.place_id)].display_name)
+			if _places.has(int(plan.place_id)) else "Неизвестное место"
+		)
+		visible.erase("arrival_ticks")
+		result.append(visible)
+	return result
+
+
+func get_activity_plan_snapshot() -> Dictionary:
+	return _activity_plans.snapshot()
 
 
 func validate_light_population() -> Array[String]:
@@ -587,6 +635,7 @@ func get_conversation_context(observer_id: int, other_person_id: int) -> Diction
 			"recently_mentioned_facts": [],
 			"emotional_tone": "NEUTRAL",
 			"previous_acts": [],
+			"activity_plans": get_activity_plans_view(observer_id),
 		}
 	var safe_facts: Array[String] = []
 	for fact_id: int in conversation.recently_mentioned_fact_ids:
@@ -598,6 +647,7 @@ func get_conversation_context(observer_id: int, other_person_id: int) -> Diction
 		"recently_mentioned_facts": safe_facts,
 		"emotional_tone": conversation.emotional_tone,
 		"previous_acts": conversation.previous_acts.duplicate(true),
+		"activity_plans": get_activity_plans_view(observer_id),
 	}
 
 
@@ -684,6 +734,7 @@ func get_metrics() -> Dictionary:
 		"light_population": light_metrics,
 		"adaptive_population": adaptive_metrics,
 		"district_social_fields": field_metrics,
+		"activity_plans": _activity_plans.snapshot(),
 		"ms6": get_ms6_metrics(),
 	}
 
@@ -711,6 +762,7 @@ func get_debug_inspector(person_id: int, observer_id: int) -> Dictionary:
 		"relationship_to_observer": get_relationship_state(person_id, observer_id),
 		"needs": get_need_profile(person_id),
 		"current_activity": get_person_activity_view(person_id),
+		"activity_plans": get_activity_plans_view(person_id),
 		"known_fact_count": known_fact_summaries.size(),
 		"known_facts": known_fact_summaries,
 		"last_decision": _last_decision_by_person.get(person_id, {}).duplicate(true),
@@ -806,6 +858,26 @@ func _player_news_item(observer_id: int, event: RefCounted) -> Dictionary:
 				event.timestamp, "PROJECT", "Поддержка районной ярмарки",
 				"%s присоединился к общей инициативе." % get_person_name(contributor_id)
 			)
+		"activity_invitation_created":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "PLAN", "Встреча запланирована", "Новое совместное занятие появилось в планах.")
+		"activity_plan_gathering":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "PLAN", "Участники собираются", "Пора прийти в назначенное место.")
+		"activity_plan_started", "activity_plan_started_late":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "PLAN", "Совместное занятие началось", "Присутствие участников подтверждено моделью.")
+		"activity_plan_completed":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "PLAN", "План выполнен", "Совместное занятие улучшило отношения.")
+		"activity_plan_missed":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "PLAN", "Встреча сорвалась", "Не все участники пришли; это повлияло на отношения.")
 		_:
 			return {}
 
@@ -1106,6 +1178,7 @@ func _activity_action_context(activity: Dictionary) -> Dictionary:
 		"visual_action": str(activity.get("visual_action", "IDLE")),
 		"plan_started_tick": int(activity.plan_started_tick),
 		"plan_ends_tick": int(activity.plan_ends_tick),
+		"duration_ticks": int(activity.get("duration_ticks", 12)),
 	}
 
 
@@ -1114,6 +1187,19 @@ func _activity_can_be_assisted(activity: String) -> bool:
 		"WORK", "TEAMWORK", "ERRANDS", "COMMUNITY", "HEALTH", "CRAFT",
 		"JOB_SEARCH", "STUDY",
 	]
+
+
+func _activity_plan_participants(
+	actor_id: int, target_id: int, activity: String, place_id: int
+) -> Array[int]:
+	var result: Array[int] = [actor_id, target_id]
+	if activity not in ["TEAMWORK", "SOCIAL", "COMMUNITY", "VISIT_FRIEND"]:
+		return result
+	for candidate_id: int in _light_population.get_agent_ids_at_place(place_id):
+		if candidate_id != target_id and candidate_id not in result:
+			result.append(candidate_id)
+			break
+	return result
 
 
 func get_relationship_state(source_person_id: int, target_person_id: int) -> Dictionary:
@@ -1502,6 +1588,22 @@ func _apply_social_effects(
 				"need_type": str(task.need_type),
 			})
 	elif action_type == "InviteToActivity":
+		var participant_ids := _activity_plan_participants(
+			actor_id, target_id, str(context.get("activity", "")), int(context.get("place_id", -1))
+		)
+		var next_start_tick := tick + (12 - posmod(tick, 12))
+		var plan_result: Dictionary = _activity_plans.create_plan({
+			"activity": str(context.get("activity", "")),
+			"activity_label": str(context.get("activity_label", "")),
+			"place_id": int(context.get("place_id", -1)),
+			"creator_id": actor_id,
+			"participant_ids": participant_ids,
+			"required_participants": 3 if participant_ids.size() >= 3 else 2,
+			"created_tick": tick,
+			"start_tick": next_start_tick,
+			"duration_ticks": maxi(12, int(context.get("duration_ticks", 12))),
+		})
+		var created_plan: Dictionary = plan_result.get("plan", {})
 		var invitation := {
 			"actor_id": actor_id,
 			"target_id": target_id,
@@ -1509,8 +1611,9 @@ func _apply_social_effects(
 			"activity_label": str(context.get("activity_label", "")),
 			"place_id": int(context.get("place_id", -1)),
 			"created_tick": tick,
-			"expires_tick": tick + 36,
+			"expires_tick": int(created_plan.get("start_tick", tick + 12)),
 			"status": "ACCEPTED",
+			"plan_id": int(created_plan.get("id", -1)),
 		}
 		_activity_invitations.append(invitation)
 		target_to_actor.familiarity = clampf(target_to_actor.familiarity + 0.05, 0.0, 1.0)
@@ -1519,6 +1622,9 @@ func _apply_social_effects(
 			"activity": str(invitation.activity),
 			"activity_label": str(invitation.activity_label),
 			"expires_tick": int(invitation.expires_tick),
+			"plan_id": int(invitation.plan_id),
+			"participant_count": participant_ids.size(),
+			"start_tick": int(created_plan.get("start_tick", next_start_tick)),
 		})
 		_events.append(SocialEventScript.new(
 			_next_event_id, "activity_invitation_created",
@@ -2400,6 +2506,13 @@ func _fact_summary_for_observer(fact_id: int, observer_id: int) -> String:
 			return "%s владеет пропуском %s" % [get_person_name(fact.subject_id), str(fact.object_value)]
 		"district_opportunity":
 			return str((fact.object_value as Dictionary).get("summary", "Новости района"))
+		"activity_plan_outcome":
+			var outcome: Dictionary = fact.object_value
+			return "%s: %s%s" % [
+				str(outcome.get("activity_label", "совместное занятие")),
+				"выполнено" if str(outcome.get("outcome", "")) == "COMPLETED" else "встреча сорвалась",
+				" после опоздания" if bool(outcome.get("late_start", false)) else "",
+			]
 		_:
 			return "%s: %s" % [fact.predicate, str(fact.object_value)]
 
@@ -2519,6 +2632,133 @@ func _next_unit_float() -> float:
 	return float(_next_random_int()) / float(_LCG_MASK)
 
 
+func _advance_activity_plans() -> void:
+	if _activity_plans == null:
+		return
+	var transitions: Array[Dictionary] = _activity_plans.advance(
+		tick, _activity_plan_participant_place
+	)
+	for transition: Dictionary in transitions:
+		_apply_activity_plan_transition(transition)
+
+
+func _activity_plan_participant_place(person_id: int) -> int:
+	if person_id >= 10_000:
+		var state: Dictionary = _light_population.get_agent_view(person_id)
+		if state.is_empty():
+			return -1
+		return int(state.get("physical_place_id", state.get("current_place_id", -1)))
+	return int(_current_place_by_person.get(person_id, -1))
+
+
+func _apply_activity_plan_transition(transition: Dictionary) -> void:
+	var plan: Dictionary = transition.plan
+	var transition_type := str(transition.type)
+	var arrived_ids: Array[int] = []
+	for value: Variant in plan.arrival_ticks.keys():
+		arrived_ids.append(int(value))
+	arrived_ids.sort()
+	var absent_ids: Array[int] = []
+	for value: Variant in transition.get("absent_participant_ids", []):
+		absent_ids.append(int(value))
+	var event_type: String = {
+		"GATHERING": "activity_plan_gathering",
+		"LATE_ARRIVAL": "activity_plan_late_arrival",
+		"STARTED": "activity_plan_started",
+		"STARTED_LATE": "activity_plan_started_late",
+		"COMPLETED": "activity_plan_completed",
+		"MISSED": "activity_plan_missed",
+	}.get(transition_type, "activity_plan_changed")
+	var affected_fact_ids: Array[int] = []
+	if transition_type in ["COMPLETED", "MISSED"]:
+		var outcome_payload := {
+			"plan_id": int(plan.id),
+			"activity": str(plan.activity),
+			"activity_label": str(plan.activity_label),
+			"place_id": int(plan.place_id),
+			"outcome": str(plan.status),
+			"late_start": bool(plan.late_start),
+			"participant_ids": plan.participant_ids.duplicate(),
+			"absent_participant_ids": absent_ids.duplicate(),
+		}
+		var fact_id := _add_fact(
+			"activity_plan", int(plan.id), "activity_plan_outcome", outcome_payload,
+			tick, 0.58 if transition_type == "COMPLETED" else 0.68, 0.10
+		)
+		affected_fact_ids.append(fact_id)
+		for participant_id: int in plan.participant_ids:
+			if _people.has(participant_id):
+				_add_knowledge(participant_id, fact_id, 1.0, participant_id, 0.25)
+		_update_activity_invitation_status(int(plan.id), str(plan.status))
+		if transition_type == "COMPLETED":
+			_apply_completed_plan_relationships(plan.participant_ids)
+			_increase_reputation(int(plan.creator_id), 0.012)
+			for participant_id: int in plan.participant_ids:
+				if _needs_by_person.has(participant_id):
+					_reduce_need(participant_id, _activity_need_type(str(plan.activity)), 0.06)
+		else:
+			_apply_missed_plan_relationships(int(plan.creator_id), arrived_ids, absent_ids)
+	var event_actor_ids := arrived_ids.duplicate()
+	if transition_type == "GATHERING":
+		event_actor_ids.clear()
+		for participant_id: int in plan.participant_ids:
+			event_actor_ids.append(participant_id)
+	elif transition_type == "LATE_ARRIVAL":
+		event_actor_ids = [int(transition.get("participant_id", -1))] as Array[int]
+	_events.append(SocialEventScript.new(
+		_next_event_id, str(event_type), event_actor_ids, absent_ids,
+		int(plan.place_id), tick,
+		0.62 if transition_type in ["COMPLETED", "MISSED"] else 0.30,
+		0.50 if transition_type == "MISSED" else 0.26,
+		0.06, affected_fact_ids
+	))
+	_next_event_id += 1
+
+
+func _apply_completed_plan_relationships(participant_ids: Array) -> void:
+	for first_value: Variant in participant_ids:
+		for second_value: Variant in participant_ids:
+			var first_id := int(first_value)
+			var second_id := int(second_value)
+			if first_id == second_id:
+				continue
+			var relationship: RefCounted = _relationships.get(_relationship_key(first_id, second_id))
+			if relationship == null:
+				continue
+			relationship.trust = clampf(relationship.trust + 0.045, 0.0, 1.0)
+			relationship.familiarity = clampf(relationship.familiarity + 0.055, 0.0, 1.0)
+
+
+func _apply_missed_plan_relationships(
+	creator_id: int, arrived_ids: Array[int], absent_ids: Array[int]
+) -> void:
+	if creator_id in absent_ids:
+		for arrived_id: int in arrived_ids:
+			var relationship: RefCounted = _relationships.get(
+				_relationship_key(arrived_id, creator_id)
+			)
+			if relationship != null:
+				relationship.trust = clampf(relationship.trust - 0.045, 0.0, 1.0)
+				relationship.resentment = clampf(relationship.resentment + 0.065, 0.0, 1.0)
+	else:
+		for absent_id: int in absent_ids:
+			var relationship: RefCounted = _relationships.get(
+				_relationship_key(creator_id, absent_id)
+			)
+			if relationship != null:
+				relationship.trust = clampf(relationship.trust - 0.035, 0.0, 1.0)
+				relationship.resentment = clampf(relationship.resentment + 0.045, 0.0, 1.0)
+
+
+func _update_activity_invitation_status(plan_id: int, status: String) -> void:
+	for index in range(_activity_invitations.size()):
+		if int(_activity_invitations[index].get("plan_id", -1)) != plan_id:
+			continue
+		var invitation: Dictionary = _activity_invitations[index]
+		invitation["status"] = status
+		_activity_invitations[index] = invitation
+
+
 func export_save_data() -> Dictionary:
 	var state: Dictionary = snapshot()
 	var adaptive: Dictionary = get_adaptive_population_snapshot()
@@ -2537,6 +2777,9 @@ func export_save_data() -> Dictionary:
 			"adaptive_transition_count": int(adaptive.transition_count),
 			"district_project_contribution_count": int(state.district_project_contribution_count),
 			"player_reputation": float(state.player_reputation),
+			"activity_plan_count": int(state.activity_plan_count),
+			"completed_activity_plan_count": int(state.completed_activity_plan_count),
+			"missed_activity_plan_count": int(state.missed_activity_plan_count),
 			"light_feedback_checksum": str(
 				get_light_population_snapshot().feedback.checksum
 			),
@@ -2582,6 +2825,15 @@ static func create_from_save_data(data: Dictionary) -> RefCounted:
 	) or (
 		expected.has("player_reputation")
 		and not is_equal_approx(float(expected.player_reputation), float(actual.player_reputation))
+	) or (
+		expected.has("activity_plan_count")
+		and int(expected.activity_plan_count) != int(actual.activity_plan_count)
+	) or (
+		expected.has("completed_activity_plan_count")
+		and int(expected.completed_activity_plan_count) != int(actual.completed_activity_plan_count)
+	) or (
+		expected.has("missed_activity_plan_count")
+		and int(expected.missed_activity_plan_count) != int(actual.missed_activity_plan_count)
 	) or (
 		expected.has("light_feedback_checksum")
 		and str(expected.light_feedback_checksum) != str(

@@ -15,9 +15,11 @@ var _target := Vector2.ZERO
 var _wait_time := 0.0
 var _rng := RandomNumberGenerator.new()
 var _name_label: Label
+var _activity_label: Label
 var _walk_phase := 0.0
 var _facing := Vector2.DOWN
 var _activity_anchor_active := false
+var _phase_progress := 0.0
 
 
 func setup(id: int, label_text: String, zone: Rect2, color: Color, role: String = "resident") -> void:
@@ -48,6 +50,16 @@ func _ready() -> void:
 	_name_label.add_theme_constant_override("shadow_offset_x", 2)
 	_name_label.add_theme_constant_override("shadow_offset_y", 2)
 	add_child(_name_label)
+	_activity_label = Label.new()
+	_activity_label.position = Vector2(-72, 22)
+	_activity_label.size = Vector2(144, 20)
+	_activity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_activity_label.add_theme_font_size_override("font_size", 10)
+	_activity_label.add_theme_color_override("font_color", Color("b8d4d3"))
+	_activity_label.add_theme_color_override("font_outline_color", Color("10171bdd"))
+	_activity_label.add_theme_constant_override("outline_size", 3)
+	_activity_label.visible = false
+	add_child(_activity_label)
 	_pick_target()
 	queue_redraw()
 
@@ -68,6 +80,14 @@ func set_movement_zone(zone: Rect2) -> void:
 func set_activity_state(state: Dictionary) -> void:
 	execution_phase = str(state.get("execution_phase", "PERFORM"))
 	visual_action = str(state.get("visual_action", "IDLE"))
+	_phase_progress = clampf(float(state.get("phase_progress", 0.0)), 0.0, 1.0)
+	if _activity_label != null:
+		_activity_label.text = "%s  %s" % [
+			_phase_symbol(execution_phase), str(state.get("activity_label", "занятие")),
+		]
+		_activity_label.tooltip_text = str(state.get("phase_label", execution_phase))
+		_activity_label.visible = true
+		_activity_label.add_theme_color_override("font_color", _phase_color(execution_phase))
 	var spot_id := str(state.get("activity_spot_id", ""))
 	_activity_anchor_active = (
 		not spot_id.is_empty() and execution_phase in ["RESERVE", "PERFORM"]
@@ -83,6 +103,7 @@ func set_activity_state(state: Dictionary) -> void:
 		)
 	elif execution_phase in ["FINISH", "INTERRUPT"]:
 		_pick_target()
+	queue_redraw()
 
 
 func _physics_process(delta: float) -> void:
@@ -140,6 +161,12 @@ func _draw() -> void:
 	_draw_role_marker(Vector2(0, -bob))
 	if _activity_anchor_active:
 		draw_arc(Vector2(0, 17), 5.0, 0.0, TAU, 10, accent.lightened(0.4), 1.5)
+	if _activity_label != null and _activity_label.visible:
+		draw_arc(Vector2(0, -1), 21.0, -PI * 0.5, -PI * 0.5 + TAU, 32, Color("223238"), 2.0)
+		draw_arc(
+			Vector2(0, -1), 21.0, -PI * 0.5, -PI * 0.5 + TAU * _phase_progress,
+			32, _phase_color(execution_phase), 2.5
+		)
 
 
 func _draw_role_marker(origin: Vector2) -> void:
@@ -153,3 +180,18 @@ func _draw_role_marker(origin: Vector2) -> void:
 		draw_arc(origin + Vector2(0, 1), 11.0, 0.15, PI - 0.15, 12, Color("f0dfbf"), 3.0)
 	elif "engineer" in role_hint or "contractor" in role_hint:
 		draw_arc(origin + Vector2(0, -8), 8.0, PI, TAU, 12, Color("e7bd62"), 4.0)
+
+
+func _phase_symbol(phase: String) -> String:
+	return {
+		"TRAVEL": "→", "RESERVE": "◇", "PERFORM": "●",
+		"FINISH": "✓", "INTERRUPT": "!",
+	}.get(phase, "·")
+
+
+func _phase_color(phase: String) -> Color:
+	return {
+		"TRAVEL": Color("87bdd9"), "RESERVE": Color("e1bf72"),
+		"PERFORM": Color("81d19a"), "FINISH": Color("b9a5dc"),
+		"INTERRUPT": Color("e28379"),
+	}.get(phase, Color("b8d4d3"))

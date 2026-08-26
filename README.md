@@ -27,6 +27,8 @@ path.
 - Groq controls only the wording and cannot change world state;
 - agent detail adapts from population groups down to active NPCs;
 - the simulation runs headlessly and is reproducible from a seed.
+- the UI exposes computed activity phases, progress, occupied spots, joint plans,
+  and the consequences of cooperative or conflicting interactions.
 
 ```text
 World → Social Simulation → NPC Decision → Communicative Act
@@ -625,6 +627,36 @@ godot_console --headless --path ./game --script res://tests/d2_activity_affordan
 The test requires all six operators, verifies their systemic effect families,
 relationship changes, canonical invitation storage, phase interruption and
 money conservation.
+
+### Joint activity plans (D3)
+
+An accepted activity invitation now creates a canonical plan with stable id,
+creator, participants, required attendance, place, gathering window, start and
+end ticks. Social and teamwork activities can recruit an additional local
+participant, turning the same data model into a small group plan.
+
+The simulation checks physical participant locations on every tick. Plans move
+through `PLANNED → GATHERING → ACTIVE → COMPLETED`; a participant arriving after
+the start produces `LATE_ARRIVAL` and may still recover the meeting, while
+insufficient attendance at the deadline produces `MISSED`. Completion improves
+trust and familiarity and reduces the relevant need. A no-show reduces trust
+and creates resentment in the participant who waited.
+
+Every transition creates a structured world event. Terminal outcomes create a
+known fact for materialized participants, become available to later memory and
+gossip work, appear in the news feed and social journal, and survive the normal
+command-log save/load path. The objective HUD shows the nearest non-terminal
+joint plan and its current status.
+
+Run the deterministic plan regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/d3_joint_activity_plans_test.gd
+```
+
+It covers on-time completion, recovered late arrival, a missed meeting,
+relationship consequences, observer-facing journal data, canonical events,
+money conservation and save/load replay.
 
 ## Groq API
 

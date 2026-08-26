@@ -17,6 +17,7 @@ func _run() -> void:
 	for required_path: String in [
 		"HUD/DistrictPulse", "HUD/NewsFeed", "HUD/ConsequenceToast",
 		"HUD/SaveLoadMenu", "HUD/StartMenu", "HUD/SocialJournal",
+		"HUD/JointPlanPanel", "HUD/ActivityConflictConfirm",
 		"HUD/DistrictMinimapPanel/MinimapContent/DistrictMinimap", "AmbientCrowd", "PlaceInterior",
 	]:
 		if scene.get_node_or_null(required_path) == null:
@@ -56,6 +57,44 @@ func _run() -> void:
 		return
 	if scene.world.get_light_agent_tier(ambient_id) != "PERSISTENT_NPC" or crowd.has_citizen(ambient_id):
 		_fail("Interactive citizen is duplicated across ambient and persistent layers")
+		return
+	if not scene._activity_card.visible or scene._activity_card.get_phase_text().is_empty():
+		_fail("Dialogue does not expose the NPC activity lifecycle")
+		return
+	var action_categories := PackedStringArray()
+	for control: Node in scene._action_row.get_children():
+		if control is Label:
+			action_categories.append(control.text)
+	if "ОБЩЕНИЕ" not in action_categories:
+		_fail("Dialogue actions are not grouped into readable categories")
+		return
+	scene._perform_model_action({
+		"type": "HinderActivity",
+		"context": {"activity_label": "текущее занятие"},
+	})
+	if not scene._conflict_confirm_overlay.visible or scene.player.input_enabled:
+		_fail("Harmful activity action does not require an explicit confirmation")
+		return
+	scene._cancel_conflict_action()
+	if scene._conflict_confirm_overlay.visible:
+		_fail("Activity conflict confirmation could not be cancelled")
+		return
+	scene._update_plan_panel([{
+		"activity_label": "Общее дело", "status": "GATHERING",
+		"place_name": "Общественный центр", "gathering_tick": scene.world.tick,
+		"start_tick": scene.world.tick + 4, "end_tick": scene.world.tick + 16,
+		"participants": [
+			{"name": "Вы", "arrived": true}, {"name": "Сосед", "arrived": false},
+		],
+	}])
+	if not scene._plan_panel.visible or not scene._plan_details_label.text.contains("○ Сосед"):
+		_fail("Joint plan HUD does not expose participant arrival status")
+		return
+	scene._update_plan_panel([])
+	var interior: Node = scene.get_node("PlaceInterior")
+	interior.configure(2, "Corner Cafe", Color("e6a75e"))
+	if int(interior.get_activity_spot_count()) != 36:
+		_fail("Interior does not expose model-backed activity spots")
 		return
 	scene._close_dialogue()
 	var world: RefCounted = scene.world
