@@ -7,6 +7,7 @@ const NpcControllerScript := preload("res://world/npc_controller.gd")
 const GroqClientScript := preload("res://llm/groq_client.gd")
 const SocialRendererScript := preload("res://rendering/social_renderer.gd")
 const SocialActionPresenterScript := preload("res://rendering/social_action_presenter.gd")
+const SocialMapPanelScript := preload("res://ui/social_map_panel.gd")
 
 const INTERACTION_DISTANCE := 92.0
 const NPC_DATA := [
@@ -19,6 +20,17 @@ const NPC_DATA := [
 	{"id": 16, "position": Vector2(1045, 420), "zone": Rect2(925, 405, 185, 90), "color": Color("8ea0ac")},
 	{"id": 20, "position": Vector2(620, 760), "zone": Rect2(560, 690, 300, 105), "color": Color("6ec18c")},
 	{"id": 7, "position": Vector2(900, 320), "zone": Rect2(700, 220, 350, 180), "color": Color("d19466")},
+	{"id": 6, "position": Vector2(1510, 470), "zone": Rect2(1410, 420, 210, 115), "color": Color("879aa8")},
+	{"id": 9, "position": Vector2(560, 420), "zone": Rect2(450, 405, 190, 115), "color": Color("d5a36d")},
+	{"id": 10, "position": Vector2(700, 735), "zone": Rect2(560, 695, 285, 90), "color": Color("77b58e")},
+	{"id": 11, "position": Vector2(970, 740), "zone": Rect2(900, 695, 215, 90), "color": Color("aa91d2")},
+	{"id": 12, "position": Vector2(1030, 500), "zone": Rect2(930, 450, 185, 190), "color": Color("6e9ed8")},
+	{"id": 14, "position": Vector2(315, 560), "zone": Rect2(110, 495, 370, 205), "color": Color("d08c6e")},
+	{"id": 15, "position": Vector2(850, 520), "zone": Rect2(660, 485, 375, 155), "color": Color("d7bd75")},
+	{"id": 17, "position": Vector2(430, 675), "zone": Rect2(110, 495, 370, 205), "color": Color("d989ac")},
+	{"id": 18, "position": Vector2(610, 610), "zone": Rect2(545, 455, 120, 220), "color": Color("829bb2")},
+	{"id": 19, "position": Vector2(1210, 520), "zone": Rect2(1160, 450, 220, 275), "color": Color("9b86bc")},
+	{"id": 21, "position": Vector2(520, 700), "zone": Rect2(490, 610, 175, 170), "color": Color("c59563")},
 ]
 
 var world: RefCounted
@@ -32,6 +44,7 @@ var _pending_act: Dictionary = {}
 var _pending_fallback := ""
 var _pending_player_line := ""
 var _near_aurora_entrance := false
+var _renderer_debug: Dictionary = {}
 
 var _prompt_panel: PanelContainer
 var _prompt_label: Label
@@ -43,6 +56,10 @@ var _role_label: Label
 var _conversation_label: Label
 var _action_row: HBoxContainer
 var _status_label: Label
+var _social_map_overlay: PanelContainer
+var _social_map_control: Control
+var _debug_overlay: PanelContainer
+var _debug_text: RichTextLabel
 
 
 func _ready() -> void:
@@ -71,7 +88,13 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_E:
+		if event.keycode == KEY_M:
+			_toggle_social_map()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_F3:
+			_toggle_debug_inspector()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_E and not _social_map_overlay.visible and not _debug_overlay.visible:
 			if _dialogue_panel.visible:
 				_close_dialogue()
 			elif _nearby_npc != null:
@@ -79,8 +102,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif _near_aurora_entrance:
 				_open_aurora_entrance()
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_ESCAPE and _dialogue_panel.visible:
-			_close_dialogue()
+		elif event.keycode == KEY_ESCAPE:
+			if _social_map_overlay.visible:
+				_toggle_social_map()
+			elif _debug_overlay.visible:
+				_toggle_debug_inspector()
+			elif _dialogue_panel.visible:
+				_close_dialogue()
 			get_viewport().set_input_as_handled()
 
 
@@ -126,7 +154,7 @@ func _build_hud() -> void:
 
 	var header := PanelContainer.new()
 	header.position = Vector2(22, 20)
-	header.size = Vector2(420, 102)
+	header.size = Vector2(460, 130)
 	header.add_theme_stylebox_override("panel", _panel_style(Color("162128e8"), Color("47616a"), 12))
 	canvas.add_child(header)
 	var header_box := VBoxContainer.new()
@@ -157,7 +185,7 @@ func _build_hud() -> void:
 	clock_panel.add_child(_clock_label)
 
 	var controls := Label.new()
-	controls.text = "WASD / стрелки — движение    E — взаимодействие"
+	controls.text = "WASD — движение   E — диалог   M — связи   F3 — debug"
 	controls.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	controls.position = Vector2(-455, 94)
 	controls.size = Vector2(430, 30)
@@ -181,6 +209,86 @@ func _build_hud() -> void:
 	_prompt_panel.add_child(_prompt_label)
 
 	_build_dialogue_panel(canvas)
+	_build_social_map(canvas)
+	_build_debug_inspector(canvas)
+
+
+func _build_social_map(canvas: CanvasLayer) -> void:
+	_social_map_overlay = PanelContainer.new()
+	_social_map_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_social_map_overlay.position = Vector2(-510, -290)
+	_social_map_overlay.size = Vector2(1020, 580)
+	_social_map_overlay.add_theme_stylebox_override("panel", _panel_style(Color("10191ff8"), Color("78cbd3"), 14))
+	_social_map_overlay.visible = false
+	canvas.add_child(_social_map_overlay)
+	var box := VBoxContainer.new()
+	_social_map_overlay.add_child(box)
+	var title := Label.new()
+	title.text = "СОЦИАЛЬНАЯ КАРТА  ·  только известные вам связи  ·  M / Esc — закрыть"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color("8ed9de"))
+	box.add_child(title)
+	_social_map_control = SocialMapPanelScript.new()
+	_social_map_control.custom_minimum_size = Vector2(980, 515)
+	_social_map_control.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(_social_map_control)
+
+
+func _build_debug_inspector(canvas: CanvasLayer) -> void:
+	_debug_overlay = PanelContainer.new()
+	_debug_overlay.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	_debug_overlay.position = Vector2(-570, -320)
+	_debug_overlay.size = Vector2(550, 640)
+	_debug_overlay.add_theme_stylebox_override("panel", _panel_style(Color("0d1519fa"), Color("b985c9"), 12))
+	_debug_overlay.visible = false
+	canvas.add_child(_debug_overlay)
+	_debug_text = RichTextLabel.new()
+	_debug_text.bbcode_enabled = true
+	_debug_text.fit_content = false
+	_debug_text.scroll_active = true
+	_debug_text.add_theme_font_size_override("normal_font_size", 12)
+	_debug_overlay.add_child(_debug_text)
+
+
+func _toggle_social_map() -> void:
+	_social_map_overlay.visible = not _social_map_overlay.visible
+	if _social_map_overlay.visible:
+		_debug_overlay.visible = false
+		_social_map_control.set_graph(world.get_social_map_view(world.player_id))
+	_sync_player_input()
+
+
+func _toggle_debug_inspector() -> void:
+	_debug_overlay.visible = not _debug_overlay.visible
+	if _debug_overlay.visible:
+		_social_map_overlay.visible = false
+		_refresh_debug_inspector()
+	_sync_player_input()
+
+
+func _sync_player_input() -> void:
+	player.input_enabled = not (
+		_dialogue_panel.visible or _social_map_overlay.visible or _debug_overlay.visible
+	)
+	if not player.input_enabled:
+		player.velocity = Vector2.ZERO
+
+
+func _refresh_debug_inspector() -> void:
+	if _debug_text == null or not _debug_overlay.visible:
+		return
+	var inspected_id := 2
+	if _dialogue_npc != null:
+		inspected_id = _dialogue_npc.person_id
+	elif _nearby_npc != null:
+		inspected_id = _nearby_npc.person_id
+	var payload := {
+		"inspector": world.get_debug_inspector(inspected_id, world.player_id),
+		"metrics": world.get_metrics(),
+		"renderer": _renderer_debug,
+	}
+	_debug_text.text = "[b]DEV INSPECTOR · F3 / Esc[/b]\n" + JSON.stringify(payload, "  ", false)
 
 
 func _build_dialogue_panel(canvas: CanvasLayer) -> void:
@@ -328,12 +436,26 @@ func _perform_model_action(action: Dictionary) -> void:
 	_conversation_label.text = "%s\n\n%s думает…" % [result.player_line, identity.name]
 	_status_label.text = result.feedback
 	if groq_client.is_configured():
+		var system_prompt := SocialRendererScript.build_system_prompt()
+		var render_context: Dictionary = world.get_conversation_context(
+			world.player_id, _dialogue_npc.person_id
+		)
+		render_context["player_line"] = result.player_line
+		render_context["location"] = "Aurora district"
+		var user_prompt := SocialRendererScript.build_user_prompt(
+			identity, result.communicative_act, render_context
+		)
+		_renderer_debug = {
+			"decision": result.decision,
+			"communicative_act": result.communicative_act,
+			"system_prompt": system_prompt,
+			"user_prompt": user_prompt,
+			"raw_response": "",
+			"final_response": "",
+		}
 		var started: bool = groq_client.generate_text(
-			SocialRendererScript.build_system_prompt(),
-			SocialRendererScript.build_user_prompt(identity, result.communicative_act, {
-				"player_line": result.player_line,
-				"location": "Aurora district",
-			})
+			system_prompt,
+			user_prompt
 		)
 		if started:
 			return
@@ -343,10 +465,15 @@ func _perform_model_action(action: Dictionary) -> void:
 func _on_groq_response(raw_text: String) -> void:
 	var rendered := SocialRendererScript.sanitize_output(raw_text, _pending_act, _pending_fallback)
 	var source := "Groq" if rendered != _pending_fallback else "локальный шаблон (ответ Groq отклонён)"
+	_renderer_debug["raw_response"] = raw_text
+	_renderer_debug["final_response"] = rendered
+	_renderer_debug["source"] = source
 	_show_dialogue_response(rendered, source)
 
 
 func _on_groq_failure(message: String) -> void:
+	_renderer_debug["failure"] = message
+	_renderer_debug["final_response"] = _pending_fallback
 	_show_dialogue_response(_pending_fallback, "локальный шаблон · %s" % message)
 
 
@@ -364,6 +491,7 @@ func _show_dialogue_response(response: String, source: String) -> void:
 	_role_label.text = world.get_person_role(_dialogue_npc.person_id)
 	_refresh_dialogue_actions()
 	_update_hud()
+	_refresh_debug_inspector()
 
 
 
@@ -421,6 +549,13 @@ func _update_hud() -> void:
 	_clock_label.text = "День 1  ·  %02d:%02d" % [hour, minute]
 	var goal: Dictionary = world.get_goal_state(world.player_id)
 	_objective_label.text = "%s\n%s" % [goal.title, goal.hint]
+	var tasks: Array[Dictionary] = world.get_active_tasks_for(world.player_id)
+	if not tasks.is_empty():
+		var task: Dictionary = tasks[0]
+		_objective_label.text += "\nПоручение: найти %s · %s" % [
+			str(task.counterpart_name), str(task.topic),
+		]
+	_refresh_debug_inspector()
 
 
 func _style_button(button: Button, primary: bool) -> void:

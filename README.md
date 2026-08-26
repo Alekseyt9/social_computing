@@ -52,21 +52,50 @@ Implemented so far:
 - models for people, organizations, relationships, facts, knowledge, and events;
 - separation between canonical truth and information available to the player;
 - the Aurora scenario with several potential social routes;
+- three independently computed Aurora credentials: a personal guest invitation,
+  a media pass, and a contractor badge;
 - `AskAbout`, `AskFavor`, and guarded preconditions for `AskIntroduction`;
 - model-generated action affordances (`BuildRapport`, `OfferHelp`, `AskAbout`,
   `AskIntroduction`, and `AskInvitation`) instead of character-specific UI branches;
 - computed relationship effects, obligations, disclosure, introductions,
   invitation ownership, and guarded entry into Aurora;
+- five personality- and role-derived NPC needs: information, reputation,
+  support, security, and resources;
+- generated social tasks with requester, counterpart, operator, deadline,
+  completion state, and relationship rewards;
+- deterministic fact propagation between NPCs according to trust, honesty,
+  and fact secrecy;
+- a bounded internal Goal Solver that verifies reachability of all three routes
+  without revealing walkthrough steps to the player;
+- bounded conversation state with topics, emotional tone, previous acts, and
+  observer-safe fact context for Groq;
 - a deterministic Decision Engine with a numerical explanation of its reasons;
 - Disclosure, CommunicativeAct, and a compositional local renderer;
 - Groq rendering for regular dialogue with semantic validation and fallback;
 - a top-down 2D district with solid buildings, a following camera, and moving NPCs;
 - proximity dialogue: walk up to a character and press `E` to talk or introduce yourself;
-- a walking-skeleton interface and headless tests.
+- an observer-safe Social Map (`M`) for discovered people, organizations, places,
+  and links;
+- a development inspector (`F3`) for personality, needs, relationships, decisions,
+  events, metrics, renderer prompts, raw output, and validated final dialogue;
+- a walking-skeleton interface and headless acceptance tests.
 
-The next milestone covers trust-changing actions, unlocking
-`AskIntroduction`, an NPC decision debug inspector, and a map of relationships
-known to the player.
+Milestone 1 is implemented. Milestone 2 has started with a deterministic layer
+of 1,200 lightweight residents alongside the 20 persistent story NPCs. The
+lightweight layer currently includes households, two workplaces, daily
+schedules, sparse local contacts, money transfers, social groups, job changes,
+and bounded gossip propagation. Population signals are imported into the
+persistent EventStore as observer-safe district opportunities: informed NPCs
+can disclose them through the model-driven `AskLocalNews` action. Aggregate/
+refinement LOD is now the active Milestone 3 workstream.
+
+The MS3 foundation adds reversible `Aggregate ↔ LightAgent ↔ PersistentNPC`
+tier membership over the same canonical residents. It starts with 1,140
+aggregated residents and 60 refined LightAgents, supports contact-neighborhood
+refinement and relevance-based persistent promotion, and checks exact
+conservation of population, employment, unemployment, money, and identity.
+Detailed agents run local updates every 12 ticks; aggregated cohorts use a
+lower-frequency 72/96-tick batch cadence.
 
 ## Project Structure
 
@@ -90,8 +119,9 @@ For a double-click launch, open the `game` folder and run `START_GAME.cmd`. It
 automatically loads the local `.env` through the main launch script.
 
 Controls: `WASD` or the arrow keys to walk, `E` to start or close a nearby
-conversation, and `Esc` to close the dialogue panel. The camera follows the
-player; buildings and the edge of the district block movement.
+conversation, `M` to open the known-social-graph map, `F3` to open the developer
+inspector, and `Esc` to close the active panel. The camera follows the player;
+buildings and the edge of the district block movement.
 
 The simplest way to start the game from PowerShell at the repository root is:
 
@@ -121,7 +151,14 @@ Run the deterministic simulation test:
 ```powershell
 godot_console --headless --path ./game --script res://tests/headless_test.gd
 godot_console --headless --path ./game --script res://tests/world_scene_test.gd
+godot_console --headless --path ./game --script res://tests/milestone1_acceptance_test.gd
 ```
+
+The Milestone 1 acceptance test verifies all three access strategies, hidden
+knowledge isolation, concrete refusal reasons, relationship-based unlocking,
+conversation memory, Social Map disclosure, LLM decision guards and fallback,
+structured events, metrics, and successful entry with every credential. It does
+not open a graphics window or call an LLM.
 
 Run the complete Aurora route in batch mode, without graphics or LLM access:
 
@@ -130,8 +167,48 @@ godot_console --headless --path ./game --script res://tests/full_playthrough_tes
 ```
 
 This test discovers contacts through observer-visible relationship facts, raises
-trust through universal social operators, obtains an invitation from an entity
-that owns the organizer capability fact, and verifies the entrance precondition.
+trust through universal social operators, obtains a media pass from an entity
+that owns the corresponding capability fact, and verifies the entrance precondition.
+
+Run the 32-seed diversity and task lifecycle batch test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/diversity_batch_test.gd
+```
+
+It requires all five need dimensions and all five generated task families to
+appear, completes a task through its actual counterpart, checks the relationship
+reward, and verifies deterministic NPC-to-NPC information propagation.
+
+Run the Milestone 2 lightweight-population batch test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone2_population_test.gd
+```
+
+It simulates 1,200 residents through a day boundary and verifies stable identity,
+valid household/workplace/group/contact references, schedule-driven movement,
+sparse contacts, deterministic job changes, gossip growth, and money conservation.
+
+Run the population-to-gameplay integration and 30-day stability test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone2_integration_test.gd
+```
+
+It verifies that lightweight gossip, employment, and group events become
+canonical district facts, reach suitable persistent NPCs, remain hidden from the
+player until disclosed in dialogue, and stay internally consistent for 30 days.
+
+Run the Milestone 3 adaptive-tier foundation test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone3_adaptive_test.gd
+```
+
+It exercises full and local refinement, coarsening, temporary promotion to
+PersistentNPC, ten days of evolution, differential update cadence, and exact
+conservation through every transition.
 
 ## Groq API
 

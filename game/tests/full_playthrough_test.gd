@@ -23,14 +23,14 @@ func _run() -> void:
 		_fail("Could not meet the first alternative-route contact")
 		return
 	if not _find_action(
-		world.get_available_social_actions(actor_id, first_press_contact), "AskInvitation"
+		world.get_available_social_actions(actor_id, first_press_contact), "RequestAccess"
 	).is_empty():
-		_fail("A non-organizer exposed AskInvitation without a capability fact")
+		_fail("A non-issuer exposed RequestAccess without a capability fact")
 		return
 
 	var current_contact := first_press_contact
 	var visited: Dictionary = {}
-	while str(world.get_goal_state(actor_id).stage) != "REQUEST_INVITATION":
+	while str(world.get_goal_state(actor_id).stage) != "REQUEST_ACCESS":
 		if visited.has(current_contact):
 			_fail("Computed social graph entered a cycle at person %d" % current_contact)
 			return
@@ -40,10 +40,10 @@ func _run() -> void:
 			return
 		current_contact = next_contact
 
-	if not _obtain_invitation(world, actor_id, current_contact):
+	if not _obtain_access(world, actor_id, current_contact):
 		return
-	if not world.has_aurora_invitation(actor_id):
-		_fail("Invitation effect was not stored in canonical world state")
+	if not world.has_valid_aurora_access(actor_id):
+		_fail("Access effect was not stored in canonical world state")
 		return
 	var entry: Dictionary = world.attempt_enter_aurora(actor_id)
 	if not entry.get("ok", false):
@@ -53,8 +53,8 @@ func _run() -> void:
 		_fail("Goal did not reach COMPLETED after entering Aurora")
 		return
 
-	print("FULL_PLAYTHROUGH_OK contacts=%s invitation=true entered=true events=%d" % [
-		str(visited.keys()), world.snapshot().event_count,
+	print("FULL_PLAYTHROUGH_OK contacts=%s access=%s entered=true events=%d" % [
+		str(visited.keys()), str(world.get_aurora_access_types(actor_id)), world.snapshot().event_count,
 	])
 	quit(0)
 
@@ -83,29 +83,31 @@ func _discover_and_unlock_next_contact(
 		var inquiry := _find_action(actions, "AskAbout")
 		if not inquiry.is_empty():
 			_perform(world, actor_id, target_id, inquiry)
+			if str(world.get_goal_state(actor_id).stage) == "REQUEST_ACCESS":
+				return target_id
 
 	_fail("No computable introduction became available through person %d" % target_id)
 	return -1
 
 
-func _obtain_invitation(world: RefCounted, actor_id: int, organizer_id: int) -> bool:
+func _obtain_access(world: RefCounted, actor_id: int, issuer_id: int) -> bool:
 	for _attempt in range(10):
-		var actions: Array[Dictionary] = world.get_available_social_actions(actor_id, organizer_id)
-		var request := _find_action(actions, "AskInvitation")
+		var actions: Array[Dictionary] = world.get_available_social_actions(actor_id, issuer_id)
+		var request := _find_action(actions, "RequestAccess")
 		if request.is_empty():
-			return _fail("Organizer does not expose computed AskInvitation operator")
-		var result: Dictionary = _perform(world, actor_id, organizer_id, request)
+			return _fail("Issuer does not expose computed RequestAccess operator")
+		var result: Dictionary = _perform(world, actor_id, issuer_id, request)
 		for effect: Dictionary in result.get("effects", []):
-			if effect.get("type") == "INVITATION_GRANTED":
+			if effect.get("type") == "ACCESS_GRANTED":
 				return true
 
 		var help := _find_action(actions, "OfferHelp")
 		if not help.is_empty():
-			_perform(world, actor_id, organizer_id, help)
+			_perform(world, actor_id, issuer_id, help)
 		var rapport := _find_action(actions, "BuildRapport")
 		if not rapport.is_empty():
-			_perform(world, actor_id, organizer_id, rapport)
-	return _fail("Utility model never granted the invitation")
+			_perform(world, actor_id, issuer_id, rapport)
+	return _fail("Utility model never granted access")
 
 
 func _find_action(actions: Array[Dictionary], action_type: String) -> Dictionary:

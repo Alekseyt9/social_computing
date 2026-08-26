@@ -9,7 +9,8 @@ static func build_system_prompt() -> String:
 		"Ты Social Renderer русскоязычной игры. Симуляция уже приняла решение NPC. "
 		+ "Сформулируй только одну естественную реплику персонажа, без пояснений и JSON. "
 		+ "Строго сохрани decision. Не соглашайся при REFUSE и не отказывай при ACCEPT. "
-		+ "Не добавляй имена, события, связи или факты, которых нет в revealed_facts. "
+		+ "Не добавляй имена, события, связи или факты, которых нет в revealed_facts или effects. "
+		+ "Если effects не пуст, естественно отрази каждый эффект и указанного в нём персонажа. "
 		+ "Не предлагай изменить состояние игры. Ответ — не более трёх коротких предложений."
 	)
 
@@ -44,6 +45,8 @@ static func sanitize_output(
 		return fallback
 	if not _decision_is_preserved(cleaned, communicative_act.decision):
 		return fallback
+	if not _effects_are_preserved(cleaned, communicative_act.get("effects", [])):
+		return fallback
 	return cleaned
 
 
@@ -67,4 +70,22 @@ static func _decision_is_preserved(text: String, decision: String) -> bool:
 		for marker: String in refusal_markers:
 			if normalized.contains(marker):
 				return false
+	return true
+
+
+static func _effects_are_preserved(text: String, effects: Array) -> bool:
+	var normalized := text.to_lower()
+	for effect: Dictionary in effects:
+		var effect_type := str(effect.get("type", ""))
+		if effect_type in ["TASK_CREATED", "INTRODUCTION_CREATED"]:
+			var required_name := str(
+				effect.get("counterpart_name", effect.get("person_name", ""))
+			).to_lower()
+			if not required_name.is_empty() and not normalized.contains(required_name):
+				return false
+		elif effect_type in ["INVITATION_GRANTED", "ACCESS_GRANTED"]:
+			if not normalized.contains("приглаш"):
+				var access_type := str(effect.get("access_type", "")).to_lower()
+				if access_type.is_empty() or not normalized.contains(access_type):
+					return false
 	return true

@@ -11,13 +11,21 @@ const RelationshipScript := preload("res://core/model/relationship.gd")
 const FactScript := preload("res://core/model/fact.gd")
 const KnowledgeEntryScript := preload("res://core/model/knowledge_entry.gd")
 const SocialEventScript := preload("res://core/model/social_event.gd")
+const ConversationScript := preload("res://core/model/conversation.gd")
 const DecisionEngineScript := preload("res://social/decision_engine.gd")
+const GoalSolverScript := preload("res://social/goal_solver.gd")
+const LightPopulationSimulationScript := preload("res://agents/light_population_simulation.gd")
+const AdaptivePopulationSystemScript := preload("res://adaptive/adaptive_population_system.gd")
 const CommunicativeActScript := preload("res://rendering/communicative_act.gd")
 const TemplateRendererScript := preload("res://rendering/template_social_renderer.gd")
 
 const _LCG_MULTIPLIER := 1_103_515_245
 const _LCG_INCREMENT := 12_345
 const _LCG_MASK := 0x7fffffff
+const TASK_OPERATORS := [
+	"GatherInformation", "DeliverMessage", "OfferSupport",
+	"VerifySituation", "CoordinateResource",
+]
 
 var seed: int
 var tick: int = 0
@@ -31,20 +39,36 @@ var _relationships: Dictionary = {}
 var _facts: Dictionary = {}
 var _knowledge_by_person: Dictionary = {}
 var _events: Array = []
+var _conversations: Dictionary = {}
+var _last_decision_by_person: Dictionary = {}
+var _workplace_fact_ids: Dictionary = {}
+var _district_opportunity_fact_ids: Array[int] = []
 var _relationship_fact_ids: Dictionary = {}
 var _action_counts: Dictionary = {}
 var _invitation_fact_ids: Dictionary = {}
+var _access_token_fact_ids_by_person: Dictionary = {}
+var _access_issuer_fact_ids: Dictionary = {}
 var _entered_aurora: Dictionary = {}
 var _party_fact_id: int = -1
 var _event_organizer_fact_ids: Dictionary = {}
+var _needs_by_person: Dictionary = {}
+var _tasks: Dictionary = {}
+var _next_task_id: int = 1
 var _next_fact_id: int = 1
 var _next_event_id: int = 1
+var _planner_meetable_ids: Array[int] = [2, 5, 8]
+var _light_population: RefCounted
+var _adaptive_population: RefCounted
 
 
 func _init(initial_seed: int) -> void:
 	seed = initial_seed
 	_random_state = initial_seed & _LCG_MASK
 	_build_aurora_scenario()
+	_light_population = LightPopulationSimulationScript.new(initial_seed, 1200)
+	_adaptive_population = AdaptivePopulationSystemScript.new(
+		_light_population, get_npc_count(), 60
+	)
 
 
 func advance(ticks: int) -> Dictionary:
@@ -52,10 +76,17 @@ func advance(ticks: int) -> Dictionary:
 	for _index in range(ticks):
 		_next_random_int()
 		tick += 1
+		_light_population.advance(1)
+		_ingest_light_population_events()
+		_update_task_deadlines()
+		if tick % 12 == 0:
+			_propagate_one_fact()
 	return snapshot()
 
 
 func snapshot() -> Dictionary:
+	var light_snapshot: Dictionary = _light_population.snapshot() if _light_population != null else {}
+	var adaptive_snapshot: Dictionary = _adaptive_population.snapshot() if _adaptive_population != null else {}
 	return {
 		"seed": seed,
 		"tick": tick,
@@ -70,6 +101,15 @@ func snapshot() -> Dictionary:
 		"fact_count": _facts.size(),
 		"knowledge_edge_count": get_knowledge_edge_count(),
 		"event_count": _events.size(),
+		"active_task_count": _count_tasks_with_status("ACTIVE"),
+		"completed_task_count": _count_tasks_with_status("COMPLETED"),
+		"light_agent_count": int(light_snapshot.get("population", 0)),
+		"light_household_count": int(light_snapshot.get("households", 0)),
+		"light_employed_count": int(light_snapshot.get("employed", 0)),
+		"light_population_checksum": str(light_snapshot.get("checksum", "")),
+		"aggregate_population_count": int(adaptive_snapshot.get("aggregate_count", 0)),
+		"refined_light_agent_count": int(adaptive_snapshot.get("light_agent_count", 0)),
+		"adaptive_persistent_count": int(adaptive_snapshot.get("promoted_persistent_count", 0)),
 	}
 
 
@@ -106,6 +146,263 @@ func get_person_role(person_id: int) -> String:
 	return person.role if person != null else ""
 
 
+func get_need_profile(person_id: int) -> Dictionary:
+	var profile: Dictionary = _needs_by_person.get(person_id, {})
+	return profile.duplicate(true)
+
+
+func get_active_tasks_for(actor_id: int) -> Array[Dictionary]:
+	var visible: Array[Dictionary] = []
+	for task: Dictionary in _tasks.values():
+		if int(task.actor_id) != actor_id or str(task.status) != "ACTIVE":
+			continue
+		var view := task.duplicate(true)
+		view["requester_name"] = get_person_name(int(task.requester_id))
+		view["counterpart_name"] = get_person_name(int(task.counterpart_id))
+		visible.append(view)
+	return visible
+
+
+func get_goal_reachability_report() -> Dictionary:
+	return GoalSolverScript.find_access_strategies(_get_internal_planning_state(), 5, 20, 10)
+
+
+func get_light_population_snapshot() -> Dictionary:
+	return _light_population.snapshot()
+
+
+func get_light_agent_view(agent_id: int) -> Dictionary:
+	return _light_population.get_agent_view(agent_id)
+
+
+func validate_light_population() -> Array[String]:
+	return _light_population.validate()
+
+
+func get_adaptive_population_snapshot() -> Dictionary:
+	return _adaptive_population.snapshot()
+
+
+func refine_light_neighborhood(
+	anchor_agent_id: int, max_depth: int = 1, limit: int = 60
+) -> Dictionary:
+	return _adaptive_population.refine_neighborhood(anchor_agent_id, max_depth, limit)
+
+
+func refine_all_light_agents() -> Dictionary:
+	return _adaptive_population.refine_all()
+
+
+func promote_light_agent_to_persistent(
+	agent_id: int, reason: String = "PLAYER_RELEVANCE"
+) -> Dictionary:
+	return _adaptive_population.promote_to_persistent(agent_id, reason)
+
+
+func release_adaptive_persistent(
+	agent_id: int, keep_as_light_agent: bool = false
+) -> Dictionary:
+	return _adaptive_population.release_persistent(agent_id, keep_as_light_agent)
+
+
+func coarsen_light_agent(agent_id: int) -> Dictionary:
+	return _adaptive_population.coarsen(agent_id)
+
+
+func get_light_agent_tier(agent_id: int) -> String:
+	return _adaptive_population.get_tier(agent_id)
+
+
+func validate_adaptive_population() -> Array[String]:
+	return _adaptive_population.validate()
+
+
+func get_district_opportunities(observer_id: int) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for fact_id: int in _district_opportunity_fact_ids:
+		if not person_knows_fact(observer_id, fact_id):
+			continue
+		var fact: RefCounted = _facts[fact_id]
+		var payload: Dictionary = fact.object_value
+		result.append({
+			"fact_id": fact_id,
+			"kind": str(payload.get("kind", "LOCAL_NEWS")),
+			"summary": str(payload.get("summary", "")),
+			"tick": fact.timestamp,
+		})
+	return result
+
+
+func get_conversation_context(observer_id: int, other_person_id: int) -> Dictionary:
+	var conversation: RefCounted = _conversations.get(
+		_conversation_key(observer_id, other_person_id)
+	)
+	if conversation == null:
+		return {
+			"participants": [get_person_name(observer_id), get_person_name(other_person_id)],
+			"active_topics": [],
+			"recently_mentioned_facts": [],
+			"emotional_tone": "NEUTRAL",
+			"previous_acts": [],
+		}
+	var safe_facts: Array[String] = []
+	for fact_id: int in conversation.recently_mentioned_fact_ids:
+		if person_knows_fact(observer_id, fact_id):
+			safe_facts.append(_fact_summary_for_observer(fact_id, observer_id))
+	return {
+		"participants": [get_person_name(observer_id), get_person_name(other_person_id)],
+		"active_topics": conversation.active_topics.duplicate(),
+		"recently_mentioned_facts": safe_facts,
+		"emotional_tone": conversation.emotional_tone,
+		"previous_acts": conversation.previous_acts.duplicate(true),
+	}
+
+
+func get_social_map_view(observer_id: int) -> Dictionary:
+	## This projection is deliberately built from the observer's KnowledgeStore.
+	var nodes_by_key: Dictionary = {}
+	var edges: Array[Dictionary] = []
+	_add_map_node(nodes_by_key, "person:%d" % observer_id, "PERSON", get_person_name(observer_id), true)
+	var knowledge: Dictionary = _knowledge_by_person.get(observer_id, {})
+	for fact_id: int in knowledge:
+		var fact: RefCounted = _facts[fact_id]
+		if fact.truth_status != "true":
+			continue
+		match fact.predicate:
+			"knows_person":
+				var target_id := int(fact.object_value)
+				_add_map_node(nodes_by_key, "person:%d" % fact.subject_id, "PERSON", get_person_name(fact.subject_id), fact.subject_id == observer_id)
+				_add_map_node(nodes_by_key, "person:%d" % target_id, "PERSON", get_person_name(target_id), target_id == observer_id)
+				edges.append({
+					"source": "person:%d" % fact.subject_id,
+					"target": "person:%d" % target_id,
+					"kind": "KNOWS",
+				})
+			"works_for":
+				var organization_id := int(fact.object_value)
+				if not _organizations.has(organization_id):
+					continue
+				_add_map_node(nodes_by_key, "person:%d" % fact.subject_id, "PERSON", get_person_name(fact.subject_id), fact.subject_id == observer_id)
+				_add_map_node(nodes_by_key, "organization:%d" % organization_id, "ORGANIZATION", _organizations[organization_id].display_name, false)
+				edges.append({
+					"source": "person:%d" % fact.subject_id,
+					"target": "organization:%d" % organization_id,
+					"kind": "WORKS_FOR",
+				})
+			"can_issue_access":
+				_add_map_node(nodes_by_key, "person:%d" % fact.subject_id, "PERSON", get_person_name(fact.subject_id), false)
+				_add_map_node(nodes_by_key, "organization:1", "ORGANIZATION", _organizations[1].display_name, false)
+				edges.append({
+					"source": "person:%d" % fact.subject_id,
+					"target": "organization:1",
+					"kind": str(fact.object_value),
+				})
+	var observer: RefCounted = _people.get(observer_id)
+	if observer != null and _places.has(observer.home_place_id):
+		var place_key := "place:%d" % observer.home_place_id
+		_add_map_node(nodes_by_key, place_key, "PLACE", _places[observer.home_place_id].display_name, false)
+		edges.append({"source": "person:%d" % observer_id, "target": place_key, "kind": "HOME"})
+	return {"observer_id": observer_id, "nodes": nodes_by_key.values(), "edges": edges}
+
+
+func get_recent_events(limit: int = 12) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var first_index := maxi(0, _events.size() - maxi(0, limit))
+	for index in range(first_index, _events.size()):
+		var event: RefCounted = _events[index]
+		result.append({
+			"id": event.id,
+			"type": event.event_type,
+			"actor_ids": event.actor_ids.duplicate(),
+			"target_ids": event.target_ids.duplicate(),
+			"tick": event.timestamp,
+			"fact_ids": event.affected_fact_ids.duplicate(),
+		})
+	return result
+
+
+func get_metrics() -> Dictionary:
+	var interactions := 0
+	for event: RefCounted in _events:
+		if event.event_type == "social_action_resolved" or event.event_type == "people_met":
+			interactions += 1
+	var light_metrics: Dictionary = get_light_population_snapshot()
+	var adaptive_metrics: Dictionary = get_adaptive_population_snapshot()
+	return {
+		"tick": tick,
+		"events": _events.size(),
+		"interactions": interactions,
+		"knowledge_edges": get_knowledge_edge_count(),
+		"active_tasks": _count_tasks_with_status("ACTIVE"),
+		"completed_tasks": _count_tasks_with_status("COMPLETED"),
+		"events_per_tick": float(_events.size()) / float(maxi(1, tick)),
+		"goal_reachable_strategies": int(get_goal_reachability_report().strategy_count),
+		"light_population": light_metrics,
+		"adaptive_population": adaptive_metrics,
+	}
+
+
+func get_debug_inspector(person_id: int, observer_id: int) -> Dictionary:
+	if not _people.has(person_id):
+		return {"error": "UNKNOWN_PERSON"}
+	var known_fact_summaries: Array[String] = []
+	for fact_id: int in _knowledge_by_person.get(person_id, {}):
+		known_fact_summaries.append(_fact_summary_for_observer(fact_id, person_id))
+	known_fact_summaries.sort()
+	var related_events: Array[Dictionary] = []
+	for event_view: Dictionary in get_recent_events(30):
+		if person_id in event_view.actor_ids or person_id in event_view.target_ids:
+			related_events.append(event_view)
+		if related_events.size() >= 8:
+			break
+	return {
+		"person": {
+			"id": person_id,
+			"name": get_person_name(person_id),
+			"role": get_person_role(person_id),
+			"personality": _people[person_id].personality.duplicate(true),
+		},
+		"relationship_to_observer": get_relationship_state(person_id, observer_id),
+		"needs": get_need_profile(person_id),
+		"known_fact_count": known_fact_summaries.size(),
+		"known_facts": known_fact_summaries,
+		"last_decision": _last_decision_by_person.get(person_id, {}).duplicate(true),
+		"recent_events": related_events,
+	}
+
+
+func _add_map_node(
+	nodes_by_key: Dictionary,
+	key: String,
+	kind: String,
+	label: String,
+	is_player: bool
+) -> void:
+	if not nodes_by_key.has(key):
+		nodes_by_key[key] = {"id": key, "kind": kind, "label": label, "is_player": is_player}
+
+
+func _get_internal_planning_state() -> Dictionary:
+	var edges: Array[Dictionary] = []
+	for relationship: RefCounted in _relationships.values():
+		edges.append({
+			"source_person_id": relationship.source_person_id,
+			"target_person_id": relationship.target_person_id,
+			"trust": relationship.trust,
+			"resentment": relationship.resentment,
+		})
+	var issuers: Array[Dictionary] = []
+	for issuer_id: int in _access_issuer_fact_ids:
+		var fact: RefCounted = _facts[_access_issuer_fact_ids[issuer_id]]
+		issuers.append({"person_id": issuer_id, "access_type": str(fact.object_value)})
+	return {
+		"player_id": player_id,
+		"locally_meetable_ids": _planner_meetable_ids.duplicate(),
+		"edges": edges,
+		"access_issuers": issuers,
+	}
+
+
 func is_person_known_to(observer_id: int, person_id: int) -> bool:
 	if observer_id == person_id:
 		return true
@@ -131,6 +428,9 @@ func introduce_people(first_person_id: int, second_person_id: int) -> Dictionary
 		return {"ok": false, "error": "SAME_PERSON"}
 	if not has_relationship(first_person_id, second_person_id):
 		_add_mutual_relationship(first_person_id, second_person_id, 0.18, 0.12)
+	var second_workplace_fact_id := int(_workplace_fact_ids.get(second_person_id, -1))
+	if second_workplace_fact_id != -1:
+		reveal_fact_to(first_person_id, second_workplace_fact_id, second_person_id, 1.0)
 	_events.append(SocialEventScript.new(
 		_next_event_id,
 		"people_met",
@@ -171,6 +471,7 @@ func introduce_people(first_person_id: int, second_person_id: int) -> Dictionary
 		"IntroduceSelf", decision, relationship, _people[second_person_id],
 		context, [], effects
 	)
+	_record_conversation(first_person_id, second_person_id, "IntroduceSelf", communicative_act, [])
 	return {
 		"ok": true,
 		"first_name": get_person_name(first_person_id),
@@ -275,12 +576,26 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 		})
 		return actions
 
-	actions.append({"type": "BuildRapport", "context": {"topic": "повседневные дела"}})
-	var help_key := _action_count_key("OfferHelp", actor_id, target_id)
-	if int(_action_counts.get(help_key, 0)) == 0:
-		actions.append({"type": "OfferHelp", "context": {"topic": "текущие трудности"}})
+	for task: Dictionary in get_active_tasks_for(actor_id):
+		if int(task.counterpart_id) == target_id:
+			actions.append({
+				"type": str(task.operator),
+				"context": {
+					"task_id": int(task.id),
+					"requester_person_id": int(task.requester_id),
+					"requester_name": str(task.requester_name),
+					"need_type": str(task.need_type),
+					"topic": str(task.topic),
+				},
+			})
 
-	var revealable_fact_id := _find_revealable_aurora_connection(target_id)
+	actions.append({"type": "BuildRapport", "context": {"topic": "повседневные дела"}})
+	if not _has_active_task_from(actor_id, target_id):
+		actions.append({"type": "OfferHelp", "context": {"topic": "текущие трудности"}})
+	if _find_revealable_district_fact(target_id, actor_id) != -1:
+		actions.append({"type": "AskLocalNews", "context": {"topic": "новости района"}})
+
+	var revealable_fact_id := _find_revealable_aurora_fact(target_id, actor_id)
 	if revealable_fact_id != -1 and not person_knows_fact(actor_id, revealable_fact_id):
 		actions.append({"type": "AskAbout", "context": {"topic": "Aurora"}})
 
@@ -298,10 +613,16 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 			},
 		})
 
-	if _event_organizer_fact_ids.has(target_id) and _party_fact_id != -1:
+	var issuer_fact_id := int(_access_issuer_fact_ids.get(target_id, -1))
+	if issuer_fact_id != -1 and person_knows_fact(actor_id, issuer_fact_id):
+		var issuer_fact: RefCounted = _facts[issuer_fact_id]
 		actions.append({
-			"type": "AskInvitation",
-			"context": {"topic": "мероприятие Aurora", "event_fact_id": _party_fact_id},
+			"type": "RequestAccess",
+			"context": {
+				"topic": "мероприятие Aurora",
+				"event_fact_id": _party_fact_id,
+				"access_type": str(issuer_fact.object_value),
+			},
 		})
 	return actions
 
@@ -327,26 +648,43 @@ func has_aurora_invitation(person_id: int) -> bool:
 	return _invitation_fact_ids.has(person_id)
 
 
+func has_valid_aurora_access(person_id: int) -> bool:
+	var tokens: Array = _access_token_fact_ids_by_person.get(person_id, [])
+	return not tokens.is_empty()
+
+
+func get_aurora_access_types(person_id: int) -> Array[String]:
+	var result: Array[String] = []
+	for fact_id: int in _access_token_fact_ids_by_person.get(person_id, []):
+		var fact: RefCounted = _facts.get(fact_id)
+		if fact != null:
+			result.append(str(fact.object_value))
+	return result
+
+
 func get_goal_state(observer_id: int) -> Dictionary:
-	var organizer_id := _get_event_organizer_id()
 	if bool(_entered_aurora.get(observer_id, false)):
 		return {
 			"stage": "COMPLETED",
 			"title": "Цель выполнена",
 			"hint": "Вы вошли на закрытое мероприятие Aurora.",
 		}
-	if has_aurora_invitation(observer_id):
+	if has_valid_aurora_access(observer_id):
 		return {
 			"stage": "ENTER_PLACE",
 			"title": "Войти в Aurora",
-			"hint": "Приглашение получено. Подойдите ко входу в офис.",
+			"hint": "Доступ подтверждён. Подойдите ко входу в офис.",
 		}
-	if organizer_id != -1 and is_person_known_to(observer_id, organizer_id):
-		return {
-			"stage": "REQUEST_INVITATION",
-			"title": "Договориться с организатором",
-			"hint": "Укрепите отношения и попросите приглашение.",
-		}
+	for issuer_id: int in _access_issuer_fact_ids:
+		var issuer_fact_id := int(_access_issuer_fact_ids[issuer_id])
+		if person_knows_fact(observer_id, issuer_fact_id):
+			return {
+				"stage": "REQUEST_ACCESS",
+				"title": "Получить доступ в Aurora",
+				"hint": "Известен способ %s через %s." % [
+					str(_facts[issuer_fact_id].object_value), get_person_name(issuer_id),
+				],
+			}
 	var discovered_contacts: Array[String] = []
 	for link: Dictionary in get_known_relationships_for(observer_id):
 		var source_id := int(link.source_person_id)
@@ -369,17 +707,20 @@ func get_goal_state(observer_id: int) -> Dictionary:
 func attempt_enter_aurora(person_id: int) -> Dictionary:
 	if not _people.has(person_id):
 		return {"ok": false, "error": "UNKNOWN_PERSON"}
-	if not has_aurora_invitation(person_id):
+	if not has_valid_aurora_access(person_id):
 		return {
 			"ok": false,
-			"error": "INVITATION_REQUIRED",
+			"error": "ACCESS_TOKEN_REQUIRED",
 			"act": "DENY_ENTRY",
 			"reason": "ACCESS_REQUIREMENT",
 		}
 	_entered_aurora[person_id] = true
+	var access_fact_ids: Array[int] = []
+	for fact_id: int in _access_token_fact_ids_by_person.get(person_id, []):
+		access_fact_ids.append(fact_id)
 	_events.append(SocialEventScript.new(
 		_next_event_id, "entered_private_event", [person_id] as Array[int],
-		[] as Array[int], 1, tick, 0.8, 0.4, 0.2, [_invitation_fact_ids[person_id]] as Array[int]
+		[] as Array[int], 1, tick, 0.8, 0.4, 0.2, access_fact_ids
 	))
 	_next_event_id += 1
 	return {"ok": true, "act": "ENTER_PLACE", "goal": get_goal_state(person_id)}
@@ -394,9 +735,9 @@ func perform_social_action(
 	if action_type == "IntroduceSelf":
 		return introduce_people(actor_id, target_id)
 	if action_type not in [
-		"BuildRapport", "OfferHelp", "AskAbout", "AskFavor",
-		"AskIntroduction", "AskInvitation"
-	]:
+		"BuildRapport", "OfferHelp", "AskAbout", "AskLocalNews", "AskFavor",
+		"AskIntroduction", "AskInvitation", "RequestAccess"
+	] and action_type not in TASK_OPERATORS:
 		return {"ok": false, "error": "UNKNOWN_ACTION"}
 	if not _people.has(actor_id) or not _people.has(target_id):
 		return {"ok": false, "error": "UNKNOWN_PERSON"}
@@ -418,6 +759,24 @@ func perform_social_action(
 
 	if action_type == "AskInvitation" and not _event_organizer_fact_ids.has(target_id):
 		return {"ok": false, "error": "TARGET_CANNOT_INVITE"}
+	if action_type == "RequestAccess":
+		var access_issuer_fact_id := int(_access_issuer_fact_ids.get(target_id, -1))
+		if access_issuer_fact_id == -1:
+			return {"ok": false, "error": "TARGET_CANNOT_ISSUE_ACCESS"}
+		if not person_knows_fact(actor_id, access_issuer_fact_id):
+			return {"ok": false, "error": "ACCESS_CAPABILITY_NOT_DISCOVERED"}
+		var access_issuer_fact: RefCounted = _facts[access_issuer_fact_id]
+		if str(context.get("access_type", "")) != str(access_issuer_fact.object_value):
+			return {"ok": false, "error": "ACCESS_TYPE_MISMATCH"}
+	if action_type in TASK_OPERATORS:
+		var task_id := int(context.get("task_id", -1))
+		var task: Dictionary = _tasks.get(task_id, {})
+		if task.is_empty() or str(task.get("status", "")) != "ACTIVE":
+			return {"ok": false, "error": "TASK_NOT_ACTIVE"}
+		if int(task.get("actor_id", -1)) != actor_id or int(task.get("counterpart_id", -1)) != target_id:
+			return {"ok": false, "error": "TASK_PARTICIPANT_MISMATCH"}
+		if str(task.get("operator", "")) != action_type:
+			return {"ok": false, "error": "TASK_OPERATOR_MISMATCH"}
 
 	var relationship: RefCounted = _relationships[relationship_key]
 	var target_person: RefCounted = _people[target_id]
@@ -436,32 +795,54 @@ func perform_social_action(
 		target_person,
 		evaluation_context
 	)
+	_last_decision_by_person[target_id] = decision.duplicate(true)
 
 	var revealed_facts: Array[Dictionary] = []
 	var effects: Array[Dictionary] = []
 	var affected_fact_ids: Array[int] = []
 	if action_type == "AskAbout" and str(context.get("topic", "")) == "Aurora":
-		var connection_fact_id := _find_revealable_aurora_connection(target_id)
-		if connection_fact_id != -1 and (
+		var revealed_fact_id := _find_revealable_aurora_fact(target_id, actor_id)
+		if revealed_fact_id != -1 and (
 			decision.decision == "ACCEPT" or decision.disclosure_level == "HIGH"
 		):
-			var connection_fact: RefCounted = _facts[connection_fact_id]
-			reveal_fact_to(actor_id, connection_fact_id, target_id, 0.9)
-			affected_fact_ids.append(connection_fact_id)
-			revealed_facts.append({
-				"type": "SOCIAL_CONNECTION",
-				"person_name": get_person_name(int(connection_fact.object_value)),
-				"organization": "Aurora",
-			})
-			var connection_relationship: RefCounted = _relationships.get(
-				_relationship_key(target_id, int(connection_fact.object_value))
-			)
-			if connection_relationship != null and connection_relationship.resentment >= 0.5:
+			var revealed_fact: RefCounted = _facts[revealed_fact_id]
+			reveal_fact_to(actor_id, revealed_fact_id, target_id, 0.9)
+			affected_fact_ids.append(revealed_fact_id)
+			if revealed_fact.predicate == "can_issue_access":
 				revealed_facts.append({
-					"type": "RELATIONSHIP_CONFLICT",
-					"person_name": get_person_name(int(connection_fact.object_value)),
-					"intensity": connection_relationship.resentment,
+					"type": "ACCESS_CAPABILITY",
+					"issuer_name": get_person_name(target_id),
+					"access_type": str(revealed_fact.object_value),
 				})
+			elif revealed_fact.predicate == "knows_person":
+				revealed_facts.append({
+					"type": "SOCIAL_CONNECTION",
+					"person_name": get_person_name(int(revealed_fact.object_value)),
+					"organization": "Aurora",
+				})
+				var connection_relationship: RefCounted = _relationships.get(
+					_relationship_key(target_id, int(revealed_fact.object_value))
+				)
+				if connection_relationship != null and connection_relationship.resentment >= 0.5:
+					revealed_facts.append({
+						"type": "RELATIONSHIP_CONFLICT",
+						"person_name": get_person_name(int(revealed_fact.object_value)),
+						"intensity": connection_relationship.resentment,
+					})
+	elif action_type == "AskLocalNews":
+		var opportunity_fact_id := _find_revealable_district_fact(target_id, actor_id)
+		if opportunity_fact_id != -1 and (
+			decision.decision == "ACCEPT" or decision.disclosure_level == "HIGH"
+		):
+			var opportunity_fact: RefCounted = _facts[opportunity_fact_id]
+			var opportunity: Dictionary = opportunity_fact.object_value
+			reveal_fact_to(actor_id, opportunity_fact_id, target_id, 0.85)
+			affected_fact_ids.append(opportunity_fact_id)
+			revealed_facts.append({
+				"type": "DISTRICT_OPPORTUNITY",
+				"kind": str(opportunity.get("kind", "LOCAL_NEWS")),
+				"summary": str(opportunity.get("summary", "")),
+			})
 
 	_apply_social_effects(
 		action_type, actor_id, target_id, context, decision, effects, affected_fact_ids
@@ -477,6 +858,9 @@ func perform_social_action(
 		effects
 	)
 	var template_response: String = TemplateRendererScript.render(communicative_act)
+	_record_conversation(
+		actor_id, target_id, action_type, communicative_act, affected_fact_ids
+	)
 
 	_events.append(SocialEventScript.new(
 		_next_event_id,
@@ -537,10 +921,21 @@ func _apply_social_effects(
 		actor_to_target.familiarity = clampf(actor_to_target.familiarity + 0.10 * diminishing, 0.0, 1.0)
 		effects.append({"type": "RELATIONSHIP_IMPROVED", "trust_delta": trust_gain})
 	elif action_type == "OfferHelp":
-		target_to_actor.obligation = clampf(target_to_actor.obligation + 0.38, 0.0, 1.0)
-		target_to_actor.trust = clampf(target_to_actor.trust + 0.11, 0.0, 1.0)
-		actor_to_target.respect = clampf(actor_to_target.respect + 0.08, 0.0, 1.0)
-		effects.append({"type": "HELP_ACCEPTED", "obligation_delta": 0.38})
+		target_to_actor.obligation = clampf(target_to_actor.obligation + 0.12, 0.0, 1.0)
+		target_to_actor.trust = clampf(target_to_actor.trust + 0.04, 0.0, 1.0)
+		actor_to_target.respect = clampf(actor_to_target.respect + 0.04, 0.0, 1.0)
+		var task := _create_task(actor_id, target_id)
+		if task.is_empty():
+			effects.append({"type": "HELP_ACCEPTED", "obligation_delta": 0.12})
+		else:
+			effects.append({
+				"type": "TASK_CREATED",
+				"task_id": int(task.id),
+				"task_kind": str(task.kind),
+				"counterpart_id": int(task.counterpart_id),
+				"counterpart_name": get_person_name(int(task.counterpart_id)),
+				"need_type": str(task.need_type),
+			})
 	elif action_type == "AskIntroduction":
 		var subject_id := int(context.subject_person_id)
 		if not has_relationship(actor_id, subject_id):
@@ -551,15 +946,268 @@ func _apply_social_effects(
 			"person_name": get_person_name(subject_id),
 		})
 	elif action_type == "AskInvitation":
-		if not _invitation_fact_ids.has(actor_id):
-			var invitation_fact_id := _add_fact(
-				"person", actor_id, "owns_access_token", "Aurora Invitation",
-				tick, 1.0, 0.1
-			)
-			_invitation_fact_ids[actor_id] = invitation_fact_id
-			_add_knowledge(actor_id, invitation_fact_id, 1.0, target_id, 0.0)
-			affected_fact_ids.append(invitation_fact_id)
-		effects.append({"type": "INVITATION_GRANTED", "event_fact_id": _party_fact_id})
+		_grant_access_token(actor_id, target_id, "GUEST_INVITATION", effects, affected_fact_ids)
+	elif action_type == "RequestAccess":
+		_grant_access_token(
+			actor_id, target_id, str(context.get("access_type", "")),
+			effects, affected_fact_ids
+		)
+	elif action_type in TASK_OPERATORS:
+		_complete_task(int(context.get("task_id", -1)), effects, affected_fact_ids)
+
+
+func _grant_access_token(
+	actor_id: int,
+	issuer_id: int,
+	access_type: String,
+	effects: Array[Dictionary],
+	affected_fact_ids: Array[int]
+) -> void:
+	var existing_types := get_aurora_access_types(actor_id)
+	if access_type not in existing_types:
+		var access_fact_id := _add_fact(
+			"person", actor_id, "owns_access_token", access_type, tick, 1.0, 0.1
+		)
+		var token_ids: Array[int] = []
+		for stored_id: int in _access_token_fact_ids_by_person.get(actor_id, []):
+			token_ids.append(stored_id)
+		token_ids.append(access_fact_id)
+		_access_token_fact_ids_by_person[actor_id] = token_ids
+		if access_type == "GUEST_INVITATION":
+			_invitation_fact_ids[actor_id] = access_fact_id
+		_add_knowledge(actor_id, access_fact_id, 1.0, issuer_id, 0.0)
+		affected_fact_ids.append(access_fact_id)
+	effects.append({
+		"type": "ACCESS_GRANTED",
+		"access_type": access_type,
+		"event_fact_id": _party_fact_id,
+	})
+
+
+func _create_task(actor_id: int, requester_id: int) -> Dictionary:
+	if _has_active_task_from(actor_id, requester_id):
+		return {}
+	var counterpart_id := _select_task_counterpart(requester_id, actor_id)
+	if counterpart_id == -1:
+		return {}
+	var profile: Dictionary = _needs_by_person.get(requester_id, {})
+	var need_type := str(profile.get("dominant_type", "SUPPORT"))
+	var task_definition: Dictionary = {
+		"INFORMATION": {
+			"kind": "INQUIRY", "operator": "GatherInformation",
+			"topic": "сведения о недавних событиях",
+		},
+		"REPUTATION": {
+			"kind": "MESSAGE", "operator": "DeliverMessage",
+			"topic": "профессиональная репутация",
+		},
+		"SUPPORT": {
+			"kind": "SOCIAL_SUPPORT", "operator": "OfferSupport",
+			"topic": "личная напряжённость",
+		},
+		"SECURITY": {
+			"kind": "VERIFICATION", "operator": "VerifySituation",
+			"topic": "надёжность договорённости",
+		},
+		"RESOURCES": {
+			"kind": "COORDINATION", "operator": "CoordinateResource",
+			"topic": "организация ресурсов",
+		},
+	}.get(need_type, {})
+	if task_definition.is_empty():
+		return {}
+
+	var task_id := _next_task_id
+	_next_task_id += 1
+	var task := {
+		"id": task_id,
+		"actor_id": actor_id,
+		"requester_id": requester_id,
+		"counterpart_id": counterpart_id,
+		"need_type": need_type,
+		"kind": str(task_definition.kind),
+		"operator": str(task_definition.operator),
+		"topic": str(task_definition.topic),
+		"created_tick": tick,
+		"deadline_tick": tick + 180,
+		"status": "ACTIVE",
+	}
+	_tasks[task_id] = task
+	var link_fact_id := get_relationship_fact_id(requester_id, counterpart_id)
+	var affected: Array[int] = []
+	if link_fact_id != -1:
+		reveal_fact_to(actor_id, link_fact_id, requester_id, 0.85)
+		affected.append(link_fact_id)
+	_events.append(SocialEventScript.new(
+		_next_event_id, "social_task_created", [requester_id] as Array[int],
+		[actor_id, counterpart_id] as Array[int], 2, tick, 0.45, 0.25, 0.15, affected
+	))
+	_next_event_id += 1
+	return task.duplicate(true)
+
+
+func _select_task_counterpart(requester_id: int, actor_id: int) -> int:
+	var candidates: Array[int] = []
+	for relationship: RefCounted in _relationships.values():
+		if relationship.source_person_id != requester_id:
+			continue
+		if relationship.target_person_id == actor_id:
+			continue
+		candidates.append(relationship.target_person_id)
+	if candidates.is_empty():
+		for person_id: int in _people:
+			if person_id != requester_id and person_id != actor_id:
+				candidates.append(person_id)
+	if candidates.is_empty():
+		return -1
+	candidates.sort()
+	var index := _next_random_int() % candidates.size()
+	return candidates[index]
+
+
+func _complete_task(
+	task_id: int, effects: Array[Dictionary], affected_fact_ids: Array[int]
+) -> void:
+	var task: Dictionary = _tasks.get(task_id, {})
+	if task.is_empty() or str(task.status) != "ACTIVE":
+		return
+	task["status"] = "COMPLETED"
+	task["completed_tick"] = tick
+	_tasks[task_id] = task
+	var actor_id := int(task.actor_id)
+	var requester_id := int(task.requester_id)
+	var requester_to_actor: RefCounted = _relationships.get(
+		_relationship_key(requester_id, actor_id)
+	)
+	var actor_to_requester: RefCounted = _relationships.get(
+		_relationship_key(actor_id, requester_id)
+	)
+	if requester_to_actor != null:
+		requester_to_actor.obligation = clampf(requester_to_actor.obligation + 0.34, 0.0, 1.0)
+		requester_to_actor.trust = clampf(requester_to_actor.trust + 0.15, 0.0, 1.0)
+	if actor_to_requester != null:
+		actor_to_requester.respect = clampf(actor_to_requester.respect + 0.12, 0.0, 1.0)
+	_reduce_need(requester_id, str(task.need_type), 0.22)
+	effects.append({
+		"type": "TASK_COMPLETED",
+		"task_id": task_id,
+		"requester_id": requester_id,
+		"requester_name": get_person_name(requester_id),
+		"need_type": str(task.need_type),
+	})
+	_events.append(SocialEventScript.new(
+		_next_event_id, "social_task_completed", [actor_id] as Array[int],
+		[requester_id, int(task.counterpart_id)] as Array[int], 2, tick,
+		0.6, 0.4, 0.2, affected_fact_ids
+	))
+	_next_event_id += 1
+
+
+func _has_active_task_from(actor_id: int, requester_id: int) -> bool:
+	for task: Dictionary in _tasks.values():
+		if int(task.actor_id) == actor_id and int(task.requester_id) == requester_id \
+		and str(task.status) == "ACTIVE":
+			return true
+	return false
+
+
+func _count_tasks_with_status(status: String) -> int:
+	var count := 0
+	for task: Dictionary in _tasks.values():
+		if str(task.status) == status:
+			count += 1
+	return count
+
+
+func _update_task_deadlines() -> void:
+	for task_id: int in _tasks:
+		var task: Dictionary = _tasks[task_id]
+		if str(task.status) == "ACTIVE" and tick > int(task.deadline_tick):
+			task["status"] = "EXPIRED"
+			_tasks[task_id] = task
+
+
+func _reduce_need(person_id: int, need_type: String, amount: float) -> void:
+	var profile: Dictionary = _needs_by_person.get(person_id, {})
+	var scores: Dictionary = profile.get("scores", {})
+	if not scores.has(need_type):
+		return
+	scores[need_type] = clampf(float(scores[need_type]) - amount, 0.0, 1.0)
+	profile["scores"] = scores
+	profile["dominant_type"] = _highest_scored_key(scores)
+	_needs_by_person[person_id] = profile
+
+
+func _derive_need_profile(person: RefCounted) -> Dictionary:
+	var traits: Dictionary = person.personality
+	var role := str(person.role).to_lower()
+	var scores := {
+		"INFORMATION": clampf(
+			float(traits.curiosity) * 0.68 + float(traits.honesty) * 0.12
+			+ (0.22 if role in ["journalist", "engineer", "pr manager"] else 0.0), 0.0, 1.0
+		),
+		"REPUTATION": clampf(
+			float(traits.ambition) * 0.65 + float(traits.conformity) * 0.16
+			+ (0.20 if role in ["event organizer", "pr manager", "hr specialist"] else 0.0), 0.0, 1.0
+		),
+		"SUPPORT": clampf(
+			float(traits.empathy) * 0.38 + float(traits.sociability) * 0.42
+			+ (0.16 if role in ["designer", "invited guest", "anna's friend"] else 0.0), 0.0, 1.0
+		),
+		"SECURITY": clampf(
+			(1.0 - float(traits.risk_tolerance)) * 0.62 + float(traits.loyalty) * 0.18
+			+ (0.25 if role in ["security director", "security officer", "corporate lawyer", "doorman"] else 0.0), 0.0, 1.0
+		),
+		"RESOURCES": clampf(
+			float(traits.ambition) * 0.32 + (1.0 - float(traits.conformity)) * 0.25
+			+ (0.28 if role in ["barista", "catering manager", "event contractor", "courier", "cafe owner"] else 0.0), 0.0, 1.0
+		),
+	}
+	return {"dominant_type": _highest_scored_key(scores), "scores": scores}
+
+
+func _highest_scored_key(scores: Dictionary) -> String:
+	var best_key := "SUPPORT"
+	var best_score := -1.0
+	for key: String in scores:
+		var score := float(scores[key])
+		if score > best_score:
+			best_key = key
+			best_score = score
+	return best_key
+
+
+func _propagate_one_fact() -> void:
+	var links: Array = _relationships.values()
+	if links.is_empty():
+		return
+	for _attempt in range(6):
+		var relationship: RefCounted = links[_next_random_int() % links.size()]
+		if relationship.source_person_id == player_id or relationship.target_person_id == player_id:
+			continue
+		var source_knowledge: Dictionary = _knowledge_by_person.get(relationship.source_person_id, {})
+		if source_knowledge.is_empty():
+			continue
+		var fact_ids: Array = source_knowledge.keys()
+		var fact_id := int(fact_ids[_next_random_int() % fact_ids.size()])
+		if person_knows_fact(relationship.target_person_id, fact_id):
+			continue
+		var fact: RefCounted = _facts[fact_id]
+		var source: RefCounted = _people[relationship.source_person_id]
+		var disclosure_capacity: float = relationship.trust * 0.72 + float(source.personality.honesty) * 0.28
+		if fact.secrecy > disclosure_capacity:
+			continue
+		_add_knowledge(
+			relationship.target_person_id, fact_id, disclosure_capacity,
+			relationship.source_person_id, fact.secrecy
+		)
+		_events.append(SocialEventScript.new(
+			_next_event_id, "information_shared", [relationship.source_person_id] as Array[int],
+			[relationship.target_person_id] as Array[int], 2, tick, 0.3, 0.2, 0.1,
+			[fact_id] as Array[int]
+		))
+		_next_event_id += 1
+		return
 
 
 func _familiarity_signal(value: float) -> String:
@@ -588,6 +1236,16 @@ func _find_revealable_aurora_connection(person_id: int) -> int:
 		var known_person: RefCounted = _people.get(known_person_id)
 		if known_person != null and known_person.workplace_organization_id == 1:
 			return fact_id
+	return -1
+
+
+func _find_revealable_aurora_fact(person_id: int, observer_id: int) -> int:
+	var issuer_fact_id := int(_access_issuer_fact_ids.get(person_id, -1))
+	if issuer_fact_id != -1 and not person_knows_fact(observer_id, issuer_fact_id):
+		return issuer_fact_id
+	var connection_fact_id := _find_revealable_aurora_connection(person_id)
+	if connection_fact_id != -1 and not person_knows_fact(observer_id, connection_fact_id):
+		return connection_fact_id
 	return -1
 
 
@@ -666,6 +1324,18 @@ func _build_aurora_scenario() -> void:
 	_event_organizer_fact_ids[4] = organizer_fact_id
 	_add_knowledge(4, organizer_fact_id, 1.0, 4, 0.0)
 	_add_knowledge(13, organizer_fact_id, 0.9, 4, 0.25)
+	var access_issuers := {
+		4: "GUEST_INVITATION",
+		13: "MEDIA_PASS",
+		10: "CONTRACTOR_BADGE",
+	}
+	for issuer_id: int in access_issuers:
+		var access_capability_fact_id := _add_fact(
+			"person", issuer_id, "can_issue_access", str(access_issuers[issuer_id]),
+			0, 0.95, 0.30
+		)
+		_access_issuer_fact_ids[issuer_id] = access_capability_fact_id
+		_add_knowledge(issuer_id, access_capability_fact_id, 1.0, issuer_id, 0.05)
 	_events.append(SocialEventScript.new(
 		_next_event_id,
 		"event_scheduled",
@@ -707,9 +1377,16 @@ func _add_person(
 	)
 	_people[person_id] = person
 	_knowledge_by_person[person_id] = {}
+	_needs_by_person[person_id] = _derive_need_profile(person)
 	if workplace_organization_id != 0:
 		var organization: RefCounted = _organizations[workplace_organization_id]
 		organization.add_member(person_id)
+		var workplace_fact_id := _add_fact(
+			"person", person_id, "works_for", workplace_organization_id,
+			0, 0.65, 0.15
+		)
+		_workplace_fact_ids[person_id] = workplace_fact_id
+		_add_knowledge(person_id, workplace_fact_id, 1.0, person_id, 0.1)
 
 
 func _add_place(place_id: int, place_name: String, place_kind: String) -> void:
@@ -789,6 +1466,128 @@ func _add_knowledge(
 
 func _relationship_key(source_person_id: int, target_person_id: int) -> String:
 	return "%d:%d" % [source_person_id, target_person_id]
+
+
+func _conversation_key(first_person_id: int, second_person_id: int) -> String:
+	return "%d:%d" % [mini(first_person_id, second_person_id), maxi(first_person_id, second_person_id)]
+
+
+func _record_conversation(
+	first_person_id: int,
+	second_person_id: int,
+	action_type: String,
+	act: Dictionary,
+	fact_ids: Array[int]
+) -> void:
+	var key := _conversation_key(first_person_id, second_person_id)
+	if not _conversations.has(key):
+		_conversations[key] = ConversationScript.new(first_person_id, second_person_id)
+	var tone := "WARM" if str(act.get("decision", "")) == "ACCEPT" else "TENSE"
+	_conversations[key].record(action_type, act, fact_ids, tone)
+
+
+func _fact_summary_for_observer(fact_id: int, observer_id: int) -> String:
+	if not _facts.has(fact_id) or not person_knows_fact(observer_id, fact_id):
+		return ""
+	var fact: RefCounted = _facts[fact_id]
+	match fact.predicate:
+		"knows_person":
+			return "%s знает %s" % [get_person_name(fact.subject_id), get_person_name(int(fact.object_value))]
+		"works_for":
+			return "%s работает в %s" % [get_person_name(fact.subject_id), _organizations[int(fact.object_value)].display_name]
+		"can_issue_access":
+			return "%s может оформить %s" % [get_person_name(fact.subject_id), str(fact.object_value)]
+		"owns_access_token":
+			return "%s владеет пропуском %s" % [get_person_name(fact.subject_id), str(fact.object_value)]
+		"district_opportunity":
+			return str((fact.object_value as Dictionary).get("summary", "Новости района"))
+		_:
+			return "%s: %s" % [fact.predicate, str(fact.object_value)]
+
+
+func _find_revealable_district_fact(person_id: int, observer_id: int) -> int:
+	for index in range(_district_opportunity_fact_ids.size() - 1, -1, -1):
+		var fact_id := _district_opportunity_fact_ids[index]
+		if person_knows_fact(person_id, fact_id) and not person_knows_fact(observer_id, fact_id):
+			return fact_id
+	return -1
+
+
+func _ingest_light_population_events() -> void:
+	for population_event: Dictionary in _light_population.drain_events():
+		var payload := _population_event_payload(population_event)
+		if payload.is_empty():
+			continue
+		var subject_type := "place"
+		var subject_id := 2
+		if str(population_event.type) == "JOB_MARKET_CHANGED":
+			subject_type = "organization"
+			subject_id = 1
+		var fact_id := _add_fact(
+			subject_type, subject_id, "district_opportunity", payload,
+			tick, 0.55, 0.2
+		)
+		_district_opportunity_fact_ids.append(fact_id)
+		if _district_opportunity_fact_ids.size() > 24:
+			_district_opportunity_fact_ids.pop_front()
+		var informed_people: Array[int] = []
+		for person_id: int in _people:
+			if person_id == player_id or not _persistent_person_receives_signal(person_id, str(population_event.type)):
+				continue
+			_add_knowledge(person_id, fact_id, 0.8, person_id, 0.3)
+			informed_people.append(person_id)
+		if informed_people.is_empty():
+			_add_knowledge(2, fact_id, 0.8, 2, 0.3)
+			informed_people.append(2)
+		_events.append(SocialEventScript.new(
+			_next_event_id, "district_population_signal", [] as Array[int],
+			informed_people, 2, tick, 0.5, 0.25, 0.2, [fact_id] as Array[int]
+		))
+		_next_event_id += 1
+
+
+func _population_event_payload(population_event: Dictionary) -> Dictionary:
+	match str(population_event.get("type", "")):
+		"GOSSIP_TREND":
+			return {
+				"kind": "LOCAL_RUMOR",
+				"summary": "В районе активно обсуждают: %s (охват: %d)." % [
+					str(population_event.get("topic", "местные события")),
+					int(population_event.get("reach", 0)),
+				],
+			}
+		"JOB_MARKET_CHANGED":
+			return {
+				"kind": "JOB_MARKET",
+				"summary": "На рынке труда появились изменения: наймов %d, уходов %d." % [
+					int(population_event.get("hires", 0)),
+					int(population_event.get("departures", 0)),
+				],
+			}
+		"GROUP_ACTIVITY":
+			return {
+				"kind": "GROUP_ACTIVITY",
+				"summary": "Одна из районных социальных групп собирается на встречу.",
+			}
+		_:
+			return {}
+
+
+func _persistent_person_receives_signal(person_id: int, signal_type: String) -> bool:
+	var person: RefCounted = _people[person_id]
+	var role := str(person.role).to_lower()
+	match signal_type:
+		"GOSSIP_TREND":
+			return (
+				"journal" in role or "editor" in role or "cafe" in role
+				or "courier" in role or float(person.personality.get("curiosity", 0.0)) >= 0.58
+			)
+		"JOB_MARKET_CHANGED":
+			return person.workplace_organization_id != 0 or "contract" in role or "security" in role
+		"GROUP_ACTIVITY":
+			return float(person.personality.get("sociability", 0.0)) >= 0.55
+		_:
+			return false
 
 
 func _action_count_key(action_type: String, actor_id: int, target_id: int) -> String:

@@ -12,6 +12,10 @@
 - [x] Универсальные BuildRapport, OfferHelp и AskInvitation.
 - [x] Доступные действия вычисляются SimulationWorld, а не UI.
 - [x] Полный headless-маршрут до входа в Aurora.
+- [x] Потребности NPC из personality и role.
+- [x] Генерируемые поручения с контрагентом, сроком и наградой отношениям.
+- [x] Распространение фактов между NPC по доверию и secrecy.
+- [x] Batch-проверка разнообразия на 32 seed.
 - [x] DecisionEngine, CommunicativeAct и template/Groq Social Renderer.
 
 ## 0. Walking skeleton

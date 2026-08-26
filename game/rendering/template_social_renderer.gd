@@ -50,6 +50,13 @@ static func _fact_clause(fact: Dictionary) -> String:
 			]
 		"RELATIONSHIP_CONFLICT":
 			return "Однако между нами есть серьёзное напряжение."
+		"ACCESS_CAPABILITY":
+			return "%s может оформить способ доступа %s." % [
+				str(fact.get("issuer_name", "Этот человек")),
+				str(fact.get("access_type", "ACCESS")),
+			]
+		"DISTRICT_OPPORTUNITY":
+			return str(fact.get("summary", "В районе появилось новое событие."))
 		_:
 			return ""
 
@@ -62,9 +69,15 @@ static func _effect_clause(effect: Dictionary) -> String:
 			return "Этот разговор помог нам лучше понять друг друга."
 		"HELP_ACCEPTED":
 			return "Я приму твою помощь и запомню это."
+		"TASK_CREATED":
+			return "Тогда поговори с %s — это поможет с моей текущей потребностью." % str(effect.get("counterpart_name", "нужным человеком"))
+		"TASK_COMPLETED":
+			return "Дело завершено; %s узнает о результате." % str(effect.get("requester_name", "заказчик"))
 		"INTRODUCTION_CREATED":
 			return "Я свяжу тебя с %s." % str(effect.get("person_name", "нужным человеком"))
 		"INVITATION_GRANTED":
 			return "Условия выполнены — приглашение твоё."
+		"ACCESS_GRANTED":
+			return "Условия выполнены — доступ %s оформлен." % str(effect.get("access_type", "ACCESS"))
 		_:
 			return ""

@@ -1,0 +1,340 @@
+class_name LightPopulationSimulation
+extends RefCounted
+
+const HouseholdScript := preload("res://core/model/household.gd")
+const SocialGroupScript := preload("res://core/model/social_group.gd")
+const LightScheduleScript := preload("res://agents/light_schedule.gd")
+
+const FIRST_AGENT_ID := 10_000
+const DEFAULT_POPULATION := 1_200
+const GOSSIP_INTERVAL := 12
+const MONEY_INTERVAL := 24
+const CONTACT_TARGET := 6
+const RUMOR_TOPICS := [
+	"вакансии в Aurora", "изменения смен в кафе", "закрытое мероприятие Aurora",
+	"новый подряд на обслуживание", "рост цен в районе", "встреча журналистов",
+	"соседская взаимопомощь", "проверка безопасности", "новый городской проект",
+	"конфликт внутри команды", "поиск временных работников", "местный благотворительный сбор",
+]
+const _LCG_MULTIPLIER := 1_103_515_245
+const _LCG_INCREMENT := 12_345
+const _LCG_MASK := 0x7fffffff
+
+var tick: int = 0
+var _random_state: int
+var _agents: Dictionary = {}
+var _households: Dictionary = {}
+var _groups: Dictionary = {}
+var _job_change_count: int = 0
+var _gossip_transfer_count: int = 0
+var _money_transfer_count: int = 0
+var _initial_total_money_cents: int = 0
+var _pending_events: Array[Dictionary] = []
+var _detailed_agent_steps: int = 0
+var _aggregate_agent_steps: int = 0
+var _detailed_agent_ids: Dictionary = {}
+
+
+func _init(initial_seed: int, population_size: int = DEFAULT_POPULATION) -> void:
+	_random_state = (initial_seed ^ 0x51f15e) & _LCG_MASK
+	_build_groups()
+	_build_population(maxi(1, population_size))
+	_build_local_contacts()
+	_update_locations()
+	_initial_total_money_cents = _total_money_cents()
+
+
+func advance(ticks_to_advance: int) -> void:
+	for _index in range(maxi(0, ticks_to_advance)):
+		tick += 1
+		if tick % GOSSIP_INTERVAL == 0:
+			_propagate_gossip()
+			_update_locations()
+		if tick % MONEY_INTERVAL == 0:
+			_transfer_money_between_contacts()
+		if tick % LightScheduleScript.DAY_TICKS == 0:
+			_update_employment()
+
+
+func snapshot() -> Dictionary:
+	var employed := 0
+	var location_counts: Dictionary = {1: 0, 2: 0, 3: 0}
+	var contact_edges := 0
+	var rumor_edges := 0
+	for agent: Dictionary in _agents.values():
+		if str(agent.employment_status) == "EMPLOYED":
+			employed += 1
+		var place_id := int(agent.current_place_id)
+		location_counts[place_id] = int(location_counts.get(place_id, 0)) + 1
+		contact_edges += agent.local_contact_ids.size()
+		rumor_edges += agent.rumor_ids.size()
+	var total_money := _total_money_cents()
+	return {
+		"tick": tick,
+		"population": _agents.size(),
+		"employed": employed,
+		"unemployed": _agents.size() - employed,
+		"households": _households.size(),
+		"workplaces": 2,
+		"social_groups": _groups.size(),
+		"local_contact_edges": contact_edges,
+		"rumor_knowledge_edges": rumor_edges,
+		"gossip_transfers": _gossip_transfer_count,
+		"job_changes": _job_change_count,
+		"money_transfers": _money_transfer_count,
+		"total_money_cents": total_money,
+		"money_conserved": total_money == _initial_total_money_cents,
+		"detailed_agent_steps": _detailed_agent_steps,
+		"aggregate_agent_steps": _aggregate_agent_steps,
+		"location_counts": location_counts,
+		"checksum": "%08x" % (
+			_random_state ^ tick ^ (_agents.size() << 4)
+			^ (employed << 11) ^ (rumor_edges << 17) ^ _job_change_count
+		),
+	}
+
+
+func get_agent_view(agent_id: int) -> Dictionary:
+	var agent: Dictionary = _agents.get(agent_id, {})
+	return agent.duplicate(true)
+
+
+func get_agent_ids() -> Array[int]:
+	var result: Array[int] = []
+	for agent_id: int in _agents:
+		result.append(agent_id)
+	result.sort()
+	return result
+
+
+func drain_events() -> Array[Dictionary]:
+	var result := _pending_events.duplicate(true)
+	_pending_events.clear()
+	return result
+
+
+func set_detail_tiers(light_agent_ids: Array, persistent_agent_ids: Array) -> void:
+	_detailed_agent_ids.clear()
+	for value: Variant in light_agent_ids:
+		_detailed_agent_ids[int(value)] = true
+	for value: Variant in persistent_agent_ids:
+		_detailed_agent_ids[int(value)] = true
+
+
+func validate() -> Array[String]:
+	var errors: Array[String] = []
+	for agent_id: int in _agents:
+		var agent: Dictionary = _agents[agent_id]
+		var household_id := int(agent.household_id)
+		if not _households.has(household_id):
+			errors.append("Agent %d has invalid household %d" % [agent_id, household_id])
+		var workplace_id := int(agent.workplace_organization_id)
+		if workplace_id not in [0, 1, 2]:
+			errors.append("Agent %d has invalid workplace %d" % [agent_id, workplace_id])
+		for group_id: int in agent.social_group_ids:
+			if not _groups.has(group_id):
+				errors.append("Agent %d has invalid group %d" % [agent_id, group_id])
+		for contact_id: int in agent.local_contact_ids:
+			if contact_id == agent_id or not _agents.has(contact_id):
+				errors.append("Agent %d has invalid local contact %d" % [agent_id, contact_id])
+		if errors.size() >= 20:
+			break
+	return errors
+
+
+func _build_groups() -> void:
+	_groups[1] = SocialGroupScript.new(1, "Aurora professional circle", "PROFESSIONAL")
+	_groups[2] = SocialGroupScript.new(2, "Corner Cafe regulars", "LOCAL")
+	_groups[3] = SocialGroupScript.new(3, "Mutual aid network", "SUPPORT")
+	_groups[4] = SocialGroupScript.new(4, "District families", "HOUSEHOLD")
+
+
+func _build_population(population_size: int) -> void:
+	var household_count := int(ceil(float(population_size) / 2.6))
+	for household_id in range(1, household_count + 1):
+		_households[household_id] = HouseholdScript.new(household_id, 3)
+	for index in range(population_size):
+		var agent_id := FIRST_AGENT_ID + index
+		var household_id := 1 + int(float(index) * float(household_count) / float(population_size))
+		var employed := (_next_random_int() % 100) < 84
+		var workplace_id := 0
+		if employed:
+			workplace_id = 1 if (_next_random_int() % 100) < 36 else 2
+		var schedule_kind := "UNEMPLOYED"
+		if employed:
+			var schedule_roll := _next_random_int() % 100
+			schedule_kind = "DAY_WORK" if schedule_roll < 68 else (
+				"EVENING_SHIFT" if schedule_roll < 88 else "FLEXIBLE"
+			)
+		var group_ids: Array[int] = [4 if household_id % 3 == 0 else 3]
+		group_ids.append(1 if workplace_id == 1 else 2)
+		var rumors: Array[int] = []
+		if index < 12:
+			rumors.append(index + 1)
+		var agent := {
+			"id": agent_id,
+			"household_id": household_id,
+			"home_place_id": 3,
+			"workplace_organization_id": workplace_id,
+			"employment_status": "EMPLOYED" if employed else "UNEMPLOYED",
+			"schedule_kind": schedule_kind,
+			"current_place_id": 3,
+			"money_cents": 4_000 + (_next_random_int() % 196_001),
+			"social_group_ids": group_ids,
+			"local_contact_ids": [] as Array[int],
+			"rumor_ids": rumors,
+		}
+		_agents[agent_id] = agent
+		_households[household_id].add_member(agent_id)
+		for group_id: int in group_ids:
+			_groups[group_id].add_member(agent_id)
+
+
+func _build_local_contacts() -> void:
+	var population_size := _agents.size()
+	for agent_id: int in get_agent_ids():
+		var agent: Dictionary = _agents[agent_id]
+		var contacts: Array[int] = []
+		var household: RefCounted = _households[int(agent.household_id)]
+		for member_id: int in household.member_ids:
+			if member_id != agent_id and member_id not in contacts:
+				contacts.append(member_id)
+		for offset in [1, -1, 7, -7, 31, -31, 97, -97]:
+			if contacts.size() >= CONTACT_TARGET:
+				break
+			var normalized_index := posmod((agent_id - FIRST_AGENT_ID) + offset, population_size)
+			var contact_id := FIRST_AGENT_ID + normalized_index
+			if contact_id != agent_id and contact_id not in contacts:
+				contacts.append(contact_id)
+		agent["local_contact_ids"] = contacts
+		_agents[agent_id] = agent
+
+
+func _update_locations() -> void:
+	for agent_id: int in _agents:
+		var agent: Dictionary = _agents[agent_id]
+		var workplace_id := int(agent.workplace_organization_id)
+		var work_place_id := 1 if workplace_id == 1 else 2
+		agent["current_place_id"] = LightScheduleScript.resolve_place(
+			str(agent.schedule_kind), tick, int(agent.home_place_id), work_place_id
+		)
+		_agents[agent_id] = agent
+
+
+func _propagate_gossip() -> void:
+	var transfers_before := _gossip_transfer_count
+	for agent_id: int in get_agent_ids():
+		var is_detailed := _detailed_agent_ids.has(agent_id)
+		if is_detailed:
+			_detailed_agent_steps += 1
+		elif tick % 72 == 0:
+			_aggregate_agent_steps += 1
+		else:
+			continue
+		var agent: Dictionary = _agents[agent_id]
+		if agent.local_contact_ids.is_empty():
+			continue
+		var contact_index: int = (_next_random_int() + agent_id + tick) % agent.local_contact_ids.size()
+		var source: Dictionary = _agents[int(agent.local_contact_ids[contact_index])]
+		if source.rumor_ids.is_empty():
+			continue
+		var rumor_id := int(source.rumor_ids[(_next_random_int() + tick) % source.rumor_ids.size()])
+		if rumor_id not in agent.rumor_ids and agent.rumor_ids.size() < 8:
+			agent.rumor_ids.append(rumor_id)
+			_agents[agent_id] = agent
+			_gossip_transfer_count += 1
+	if tick % 72 == 0 and _gossip_transfer_count > transfers_before:
+		var trend := _find_trending_rumor()
+		if not trend.is_empty():
+			_pending_events.append({
+				"type": "GOSSIP_TREND",
+				"tick": tick,
+				"rumor_id": int(trend.rumor_id),
+				"topic": RUMOR_TOPICS[int(trend.rumor_id) - 1],
+				"reach": int(trend.reach),
+			})
+
+
+func _transfer_money_between_contacts() -> void:
+	for agent_id: int in get_agent_ids():
+		var is_detailed := _detailed_agent_ids.has(agent_id)
+		if is_detailed:
+			_detailed_agent_steps += 1
+		elif tick % 96 == 0:
+			_aggregate_agent_steps += 1
+		else:
+			continue
+		if agent_id % 19 != tick % 19:
+			continue
+		var payer: Dictionary = _agents[agent_id]
+		if payer.local_contact_ids.is_empty() or int(payer.money_cents) < 100:
+			continue
+		var receiver_id := int(payer.local_contact_ids[_next_random_int() % payer.local_contact_ids.size()])
+		var receiver: Dictionary = _agents[receiver_id]
+		var amount := 25 + (_next_random_int() % 176)
+		payer["money_cents"] = int(payer.money_cents) - amount
+		receiver["money_cents"] = int(receiver.money_cents) + amount
+		_agents[agent_id] = payer
+		_agents[receiver_id] = receiver
+		_money_transfer_count += 1
+
+
+func _update_employment() -> void:
+	var hires := 0
+	var departures := 0
+	for agent_id: int in get_agent_ids():
+		var agent: Dictionary = _agents[agent_id]
+		var roll := (_next_random_int() + agent_id + tick) % 1000
+		if str(agent.employment_status) == "UNEMPLOYED" and roll < 45:
+			agent["employment_status"] = "EMPLOYED"
+			agent["workplace_organization_id"] = 1 if (_next_random_int() % 100) < 36 else 2
+			agent["schedule_kind"] = "DAY_WORK" if (_next_random_int() % 100) < 75 else "EVENING_SHIFT"
+			_job_change_count += 1
+			hires += 1
+		elif str(agent.employment_status) == "EMPLOYED" and roll < 8:
+			agent["employment_status"] = "UNEMPLOYED"
+			agent["workplace_organization_id"] = 0
+			agent["schedule_kind"] = "UNEMPLOYED"
+			_job_change_count += 1
+			departures += 1
+		_agents[agent_id] = agent
+	_update_locations()
+	if hires + departures > 0:
+		_pending_events.append({
+			"type": "JOB_MARKET_CHANGED",
+			"tick": tick,
+			"hires": hires,
+			"departures": departures,
+		})
+	_pending_events.append({
+		"type": "GROUP_ACTIVITY",
+		"tick": tick,
+		"group_id": 1 + int((_next_random_int() + tick) % _groups.size()),
+	})
+
+
+func _find_trending_rumor() -> Dictionary:
+	var counts: Dictionary = {}
+	for agent: Dictionary in _agents.values():
+		for rumor_id: int in agent.rumor_ids:
+			counts[rumor_id] = int(counts.get(rumor_id, 0)) + 1
+	var best_id := -1
+	var best_reach := -1
+	for rumor_id: int in counts:
+		var reach := int(counts[rumor_id])
+		if reach > best_reach or (reach == best_reach and rumor_id < best_id):
+			best_id = rumor_id
+			best_reach = reach
+	return {} if best_id == -1 else {"rumor_id": best_id, "reach": best_reach}
+
+
+func _total_money_cents() -> int:
+	var total := 0
+	for agent: Dictionary in _agents.values():
+		total += int(agent.money_cents)
+	return total
+
+
+func _next_random_int() -> int:
+	_random_state = (_LCG_MULTIPLIER * _random_state + _LCG_INCREMENT) & _LCG_MASK
+	return _random_state

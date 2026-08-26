@@ -78,6 +78,14 @@ static func _action_costs(action_type: String, context: Dictionary) -> Dictionar
 		"moral_resistance": 0.0,
 		"secrecy": 0.25,
 	}
+	if action_type in [
+		"GatherInformation", "DeliverMessage", "OfferSupport",
+		"VerifySituation", "CoordinateResource"
+	]:
+		defaults.expected_benefit = 0.70
+		defaults.personal_cost = 0.06
+		defaults.risk = 0.08
+		defaults.secrecy = 0.10
 	match action_type:
 		"BuildRapport":
 			defaults.expected_benefit = 0.75
@@ -93,6 +101,11 @@ static func _action_costs(action_type: String, context: Dictionary) -> Dictionar
 			defaults.expected_benefit = 0.05
 			defaults.personal_cost = 0.10
 			defaults.risk = 0.25
+		"AskLocalNews":
+			defaults.expected_benefit = 0.12
+			defaults.personal_cost = 0.05
+			defaults.risk = 0.10
+			defaults.secrecy = 0.12
 		"AskFavor":
 			defaults.personal_cost = 0.55
 			defaults.risk = 0.65
@@ -107,6 +120,11 @@ static func _action_costs(action_type: String, context: Dictionary) -> Dictionar
 			defaults.expected_benefit = 0.05
 			defaults.personal_cost = 0.20
 			defaults.risk = 0.25
+			defaults.secrecy = 0.35
+		"RequestAccess":
+			defaults.expected_benefit = 0.05
+			defaults.personal_cost = 0.22
+			defaults.risk = 0.28
 			defaults.secrecy = 0.35
 
 	for key: String in defaults:

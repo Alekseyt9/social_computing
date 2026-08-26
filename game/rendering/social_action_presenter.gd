@@ -16,10 +16,28 @@ static func button_label(action: Dictionary) -> String:
 			return "Предложить помощь"
 		"AskAbout":
 			return "Спросить: %s" % str(context.get("topic", "тема"))
+		"AskLocalNews":
+			return "Спросить местные новости"
 		"AskIntroduction":
 			return "Попросить знакомство: %s" % str(context.get("subject_name", "контакт"))
 		"AskInvitation":
 			return "Попросить приглашение"
+		"RequestAccess":
+			return {
+				"GUEST_INVITATION": "Попросить гостевое приглашение",
+				"MEDIA_PASS": "Запросить аккредитацию прессы",
+				"CONTRACTOR_BADGE": "Запросить пропуск подрядчика",
+			}.get(str(context.get("access_type", "")), "Запросить доступ")
+		"GatherInformation":
+			return "Узнать сведения для %s" % str(context.get("requester_name", "знакомого"))
+		"DeliverMessage":
+			return "Передать сообщение от %s" % str(context.get("requester_name", "знакомого"))
+		"OfferSupport":
+			return "Обсудить проблему от имени %s" % str(context.get("requester_name", "знакомого"))
+		"VerifySituation":
+			return "Проверить договорённость для %s" % str(context.get("requester_name", "знакомого"))
+		"CoordinateResource":
+			return "Согласовать ресурсы для %s" % str(context.get("requester_name", "знакомого"))
 		_:
 			return "Взаимодействовать"
 
@@ -36,10 +54,24 @@ static func player_line(action_type: String, context: Dictionary) -> String:
 			return _join(["Если", "тебе", "нужна", "помощь", "я", "могу", "помочь"], ".")
 		"AskAbout":
 			return _join(["Ты", "можешь", "рассказать", "мне", "про", topic], "?")
+		"AskLocalNews":
+			return _join(["Что", "нового", "происходит", "в", "районе"], "?")
 		"AskIntroduction":
 			return _join(["Ты", "можешь", "познакомить", "меня", "с", subject], "?")
 		"AskInvitation":
 			return _join(["Можно", "получить", "приглашение", "на", topic], "?")
+		"RequestAccess":
+			return _join(["Можно", "оформить", str(context.get("access_type", "доступ")), "на", topic], "?")
+		"GatherInformation":
+			return _join(["Мне", "нужно", "уточнить", topic, "для", str(context.get("requester_name", "знакомого"))], ".")
+		"DeliverMessage":
+			return _join(["Я", "передаю", "сообщение", "от", str(context.get("requester_name", "знакомого"))], ".")
+		"OfferSupport":
+			return _join(["Давай", "попробуем", "разобраться", "с", topic], ".")
+		"VerifySituation":
+			return _join(["Мне", "нужно", "проверить", topic], ".")
+		"CoordinateResource":
+			return _join(["Предлагаю", "согласовать", topic], ".")
 		_:
 			return _join(["Можно", "обсудить", topic], "?")
 
