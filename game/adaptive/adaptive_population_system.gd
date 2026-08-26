@@ -78,7 +78,8 @@ func refine_all() -> Dictionary:
 func update_relevance_focus(
 	player_place_id: int,
 	socially_relevant_ids: Array = [],
-	light_budget: int = 60
+	light_budget: int = 60,
+	include_snapshot: bool = true
 ) -> Dictionary:
 	var bounded_budget := clampi(light_budget, 1, _population.get_agent_ids().size())
 	var relevant_set: Dictionary = {}
@@ -123,12 +124,28 @@ func update_relevance_focus(
 	_last_socially_relevant_ids = _sorted_int_keys(relevant_set)
 	_last_light_budget = bounded_budget
 	_sync_population_detail_sets()
-	return {
+	var result := {
 		"ok": true,
 		"changed_tier_count": changed,
 		"local_candidate_count": local_set.size(),
 		"social_candidate_count": relevant_set.size(),
-		"state": snapshot(),
+	}
+	if include_snapshot:
+		result["state"] = snapshot()
+	return result
+
+
+func get_focus_view() -> Dictionary:
+	return {
+		"refined_light_ids": _sorted_int_keys(_light_agent_ids),
+		"promoted_persistent_ids": _sorted_int_keys(_persistent_profiles),
+		"light_agent_count": _light_agent_ids.size(),
+		"promoted_persistent_count": _persistent_profiles.size(),
+		"focus_policy": {
+			"update_count": _focus_update_count,
+			"player_place_id": _last_focus_place_id,
+			"light_budget": _last_light_budget,
+		},
 	}
 
 

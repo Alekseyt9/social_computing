@@ -94,6 +94,8 @@ func resolve(
 	selected["is_interactable"] = phase == "PERFORM"
 	selected["interrupted"] = phase == "INTERRUPT"
 	selected["visual_action"] = _visual_action(str(selected.activity), phase)
+	selected["queue_position"] = 0
+	selected["queue_length"] = 0
 	return selected
 
 

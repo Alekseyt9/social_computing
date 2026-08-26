@@ -58,6 +58,11 @@ func set_activity(state: Dictionary) -> void:
 	var spot_id := str(state.get("activity_spot_id", ""))
 	if not spot_id.is_empty():
 		details.append("точка %s" % spot_id.get_slice("-", 1))
+	var queue_position := int(state.get("queue_position", 0))
+	if queue_position > 0:
+		details.append("очередь %d из %d" % [
+			queue_position, int(state.get("queue_length", queue_position)),
+		])
 	var ends_tick := int(state.get("plan_ends_tick", -1))
 	if ends_tick >= 0:
 		details.append("до тика %d" % ends_tick)
@@ -93,6 +98,7 @@ func _phase_color(phase: String) -> Color:
 		"PERFORM": Color("81d19a"),
 		"FINISH": Color("b9a5dc"),
 		"INTERRUPT": Color("e28379"),
+		"WAIT_FOR_SPOT": Color("e5ae68"),
 	}.get(phase, Color("a9c0c2"))
 
 

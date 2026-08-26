@@ -10,6 +10,7 @@ const SpatialNeighborhoodBackendScript := preload("res://ms6/spatial_neighborhoo
 const CohortAggregateBackendScript := preload("res://ms6/cohort_aggregate_backend.gd")
 const ActivityUtilityModelScript := preload("res://activities/activity_utility_model.gd")
 const ActivityExecutionModelScript := preload("res://activities/activity_execution_model.gd")
+const ActivitySpotAllocatorScript := preload("res://activities/activity_spot_allocator.gd")
 
 const FIRST_AGENT_ID := 10_000
 const DEFAULT_POPULATION := 1_200
@@ -51,6 +52,9 @@ var _spatial_backend: RefCounted
 var _cohort_backend: RefCounted
 var _activity_model: RefCounted
 var _activity_execution_model: RefCounted
+var _activity_spot_allocator: RefCounted
+var _activity_spot_allocation_cache: Dictionary = {}
+var _detail_tier_revision := 0
 var _ms6_update_count := 0
 var _ms6_backend_status := "NOT_RUN"
 var _ms6_max_error := 0.0
@@ -83,6 +87,7 @@ func _init(initial_seed: int, population_size: int = DEFAULT_POPULATION) -> void
 	_cohort_backend = CohortAggregateBackendScript.new()
 	_activity_model = ActivityUtilityModelScript.new()
 	_activity_execution_model = ActivityExecutionModelScript.new(_activity_model)
+	_activity_spot_allocator = ActivitySpotAllocatorScript.new()
 	_build_groups()
 	_build_population(maxi(1, population_size))
 	_build_local_contacts()
@@ -480,6 +485,7 @@ func get_agent_view(agent_id: int) -> Dictionary:
 		"destination_place_id", "physical_place_id", "reservation_status",
 		"activity_spot_id", "reservation_token", "spot_capacity", "is_interactable",
 		"interrupted", "visual_action", "plan_started_tick", "plan_ends_tick",
+		"queue_position", "queue_length",
 	]:
 		agent[key] = schedule_state.get(key)
 	return agent
@@ -499,7 +505,13 @@ func get_agent_ids() -> Array[int]:
 func get_agent_ids_at_place(place_id: int) -> Array[int]:
 	var result: Array[int] = []
 	for agent_id: int in get_agent_ids():
-		if int(get_agent_view(agent_id).current_place_id) == place_id:
+		# Relevance ranking needs a bulk destination cohort, not the full
+		# three-resolution execution projection for every aggregate citizen.
+		var agent: Dictionary = _store.get_agent(agent_id)
+		var destination: Dictionary = _activity_model.resolve(
+			agent, tick, _social_field_influence, false
+		)
+		if int(destination.place_id) == place_id:
 			result.append(agent_id)
 	result.sort()
 	return result
@@ -517,10 +529,13 @@ func set_detail_tiers(light_agent_ids: Array, persistent_agent_ids: Array) -> vo
 		_detailed_agent_ids[int(value)] = true
 	for value: Variant in persistent_agent_ids:
 		_detailed_agent_ids[int(value)] = true
+	_detail_tier_revision += 1
+	_activity_spot_allocation_cache.clear()
 
 
 func set_social_field_influence(fields: Dictionary) -> void:
 	_social_field_influence = fields.duplicate(true)
+	_activity_spot_allocation_cache.clear()
 
 
 func resolve_contextual_activity(agent_id: int, activity: String) -> Dictionary:
@@ -617,6 +632,7 @@ func apply_activity_interaction(agent_id: int, interaction_type: String) -> Dict
 				"until_tick": int(execution.plan_ends_tick),
 				"activity": str(execution.activity),
 			}
+			_activity_spot_allocation_cache.clear()
 		"OBSERVE", "INVITE":
 			pass
 		_:
@@ -651,7 +667,7 @@ func _resolve_activity_execution(
 	if interruption.is_empty() or at_tick < int(interruption.plan_started_tick) or (
 		at_tick >= int(interruption.until_tick)
 	) or int(state.plan_started_tick) != int(interruption.plan_started_tick):
-		return state
+		return _apply_detail_spot_allocation(state, int(agent.id), at_tick)
 	state["execution_phase"] = "INTERRUPT"
 	state["phase_label"] = "прерывает занятие"
 	state["phase_progress"] = 1.0
@@ -664,12 +680,91 @@ func _resolve_activity_execution(
 	return state
 
 
+func _apply_detail_spot_allocation(
+	state: Dictionary, agent_id: int, at_tick: int
+) -> Dictionary:
+	if not _detailed_agent_ids.has(agent_id) or str(state.execution_phase) not in [
+		"RESERVE", "PERFORM",
+	]:
+		return state
+	var allocation: Dictionary = _get_detail_spot_allocation(at_tick).get(agent_id, {})
+	if allocation.is_empty():
+		return state
+	state["queue_position"] = int(allocation.get("queue_position", 0))
+	state["queue_length"] = int(allocation.get("queue_length", 0))
+	if bool(allocation.get("admitted", false)):
+		state["activity_spot_id"] = str(allocation.activity_spot_id)
+		state["reservation_token"] = str(allocation.reservation_token)
+		state["reservation_status"] = "RESERVED"
+		return state
+	state["execution_phase"] = "WAIT_FOR_SPOT"
+	state["phase_label"] = "ожидает свободное место"
+	state["phase_progress"] = 0.0
+	state["reservation_status"] = "QUEUED"
+	state["activity_spot_id"] = ""
+	state["reservation_token"] = ""
+	state["is_interactable"] = false
+	state["interrupted"] = false
+	state["visual_action"] = "WAIT"
+	return state
+
+
+func _get_detail_spot_allocation(at_tick: int) -> Dictionary:
+	var slot_start := at_tick - posmod(
+		at_tick, ActivityExecutionModelScript.DECISION_INTERVAL
+	)
+	var cache_key := "%d:%d" % [slot_start, _detail_tier_revision]
+	if _activity_spot_allocation_cache.has(cache_key):
+		return _activity_spot_allocation_cache[cache_key].assignments
+	var allocation_tick := slot_start + 4
+	var candidate_states: Array[Dictionary] = []
+	var detail_ids: Array[int] = []
+	for value: Variant in _detailed_agent_ids.keys():
+		detail_ids.append(int(value))
+	detail_ids.sort()
+	for agent_id: int in detail_ids:
+		var agent: Dictionary = _store.get_agent(agent_id)
+		if agent.is_empty():
+			continue
+		var candidate: Dictionary = _activity_execution_model.resolve(
+			agent, allocation_tick, _social_field_influence, false
+		)
+		var interruption: Dictionary = _activity_interruptions.get(agent_id, {})
+		if not interruption.is_empty() and int(candidate.plan_started_tick) == int(
+			interruption.get("plan_started_tick", -1)
+		):
+			continue
+		candidate["agent_id"] = agent_id
+		candidate_states.append(candidate)
+	var allocation_result: Dictionary = _activity_spot_allocator.allocate(candidate_states)
+	_activity_spot_allocation_cache[cache_key] = allocation_result
+	while _activity_spot_allocation_cache.size() > 6:
+		_activity_spot_allocation_cache.erase(_activity_spot_allocation_cache.keys()[0])
+	return allocation_result.assignments
+
+
+func get_activity_spot_metrics(at_tick: int = -1) -> Dictionary:
+	var query_tick := tick if at_tick < 0 else at_tick
+	_get_detail_spot_allocation(query_tick)
+	var slot_start := query_tick - posmod(
+		query_tick, ActivityExecutionModelScript.DECISION_INTERVAL
+	)
+	var cache_key := "%d:%d" % [slot_start, _detail_tier_revision]
+	return _activity_spot_allocation_cache.get(
+		cache_key, {}
+	).get("metrics", {}).duplicate(true)
+
+
 func _expire_activity_interruptions() -> void:
+	var changed := false
 	for value: Variant in _activity_interruptions.keys():
 		var agent_id := int(value)
 		var interruption: Dictionary = _activity_interruptions[agent_id]
 		if tick >= int(interruption.get("until_tick", tick)):
 			_activity_interruptions.erase(agent_id)
+			changed = true
+	if changed:
+		_activity_spot_allocation_cache.clear()
 
 
 func validate() -> Array[String]:

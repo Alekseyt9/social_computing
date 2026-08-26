@@ -156,7 +156,8 @@ Controls: `WASD` or the arrow keys to walk, `E` to interact, `T` to advance one
 simulated hour, `J` to open the Social Journal, `M` to open the known-social-
 graph map, and `F3` to open the developer inspector. `Space` pauses time;
 `1`/`2`/`3` select 1×/4×/12× speed. Press `Esc` to close the active panel or
-open the pause/save menu. `F5` quick-saves to slot 1 and `F9` quick-loads slot 1.
+open the pause/save menu. The mouse wheel smoothly zooms the world camera in or
+out within the current map bounds. `F5` quick-saves to slot 1 and `F9` quick-loads slot 1.
 
 ### Saving and loading
 
@@ -164,7 +165,7 @@ Open the menu with `Esc`. There are three independent slots; each row has
 `Save` and `Load` actions. A save restores the canonical simulation state,
 including time, people, adaptive-detail tiers, schedules, money, relationships,
 knowledge, social fields, generated history, the player's position, moving story
-NPC positions, and the current building interior. The save is versioned and
+NPC positions, camera zoom, and the current building interior. The save is versioned and
 verified against deterministic checksums when loaded; an invalid or damaged file
 is rejected instead of partially applying it.
 
@@ -657,6 +658,54 @@ godot_console --headless --path ./game --script res://tests/d3_joint_activity_pl
 It covers on-time completion, recovered late arrival, a missed meeting,
 relationship consequences, observer-facing journal data, canonical events,
 money conservation and save/load replay.
+
+### Long-horizon diversity audit (D5)
+
+The graphics-free D5 audit advances four deterministic seeds for 14 in-game
+days. It measures activity and transition coverage, lifecycle phases, visual
+actions, physical spot use and schedule-family variety; it also checks plan
+completion/late/missed outcomes, population identity, non-negative and
+conserved money, and at least three reachable Aurora strategies.
+
+```powershell
+godot_console --headless --path ./game --script res://tests/d5_long_horizon_diversity_test.gd
+```
+
+The current audit covers all 16 activities, 163 transition types and 334 spot
+ids. Across 5,858 sampled `WAIT_FOR_SPOT` states, no two detailed NPCs hold the
+same physical spot.
+
+### Exclusive activity spots and queues
+
+Physical LightAgent/PersistentNPC representations share a deterministic spot
+allocator. Colliding claims probe for another free spot; excess demand enters
+`WAIT_FOR_SPOT` with a stable queue position, no activity affordances and no
+reservation token. Priority rotates at the next planning slot, while aggregate
+citizens remain cohort-level and do not allocate thousands of scene objects.
+
+```powershell
+godot_console --headless --path ./game --script res://tests/activity_spot_queue_test.gd
+```
+
+### Runtime tick budget
+
+The playable scene uses the snapshot-free runtime advance path. A full 1,200-
+agent diagnostic snapshot is still used by saves and tests, but is no longer
+built once per visible second. On the development machine this reduced the
+average runtime tick from about 326 ms to about 1 ms without changing canonical
+state.
+
+The adaptive-focus UI path also uses a lightweight 60-id projection rather than
+two full population snapshots. Its 12-tick refresh peak fell from roughly
+686 ms to 69 ms in the headless scene profile:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/ui_runtime_frame_budget_test.gd
+```
+
+```powershell
+godot_console --headless --path ./game --script res://tests/runtime_tick_budget_test.gd
+```
 
 ## Groq API
 

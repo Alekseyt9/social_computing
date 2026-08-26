@@ -105,7 +105,7 @@ func _init(initial_seed: int) -> void:
 	_activity_plans = ActivityPlanSystemScript.new()
 
 
-func advance(ticks: int) -> Dictionary:
+func advance(ticks: int, include_snapshot: bool = true) -> Dictionary:
 	assert(ticks >= 0, "Tick count cannot be negative")
 	if ticks > 0:
 		_record_command("ADVANCE", {"ticks": ticks})
@@ -120,7 +120,10 @@ func advance(ticks: int) -> Dictionary:
 		_update_task_deadlines()
 		if tick % 12 == 0:
 			_propagate_one_fact()
-	return snapshot()
+	# The playable scene advances once per second and does not consume the full
+	# population projection. Building it scans all light agents and belongs to
+	# diagnostics, saves and tests, not the frame-time path.
+	return snapshot() if include_snapshot else {"tick": tick}
 
 
 func snapshot() -> Dictionary:
@@ -323,6 +326,10 @@ func get_light_agent_schedule_state(agent_id: int, at_tick: int) -> Dictionary:
 	return _light_population.get_agent_schedule_state(agent_id, at_tick)
 
 
+func get_activity_spot_metrics(at_tick: int = -1) -> Dictionary:
+	return _light_population.get_activity_spot_metrics(at_tick)
+
+
 func get_person_activity_view(person_id: int) -> Dictionary:
 	if not _activated_adaptive_person_ids.has(person_id):
 		return {}
@@ -369,6 +376,10 @@ func get_adaptive_population_snapshot() -> Dictionary:
 	return _adaptive_population.snapshot()
 
 
+func get_adaptive_focus_view() -> Dictionary:
+	return _adaptive_population.get_focus_view()
+
+
 func refine_light_neighborhood(
 	anchor_agent_id: int, max_depth: int = 1, limit: int = 60
 ) -> Dictionary:
@@ -390,10 +401,11 @@ func refine_all_light_agents() -> Dictionary:
 func update_adaptive_focus(
 	player_place_id: int,
 	socially_relevant_light_ids: Array = [],
-	light_budget: int = 60
+	light_budget: int = 60,
+	include_snapshot: bool = true
 ) -> Dictionary:
 	var result: Dictionary = _adaptive_population.update_relevance_focus(
-		player_place_id, socially_relevant_light_ids, light_budget
+		player_place_id, socially_relevant_light_ids, light_budget, include_snapshot
 	)
 	if bool(result.get("ok", false)):
 		_record_command("UPDATE_FOCUS", {
@@ -1179,6 +1191,8 @@ func _activity_action_context(activity: Dictionary) -> Dictionary:
 		"plan_started_tick": int(activity.plan_started_tick),
 		"plan_ends_tick": int(activity.plan_ends_tick),
 		"duration_ticks": int(activity.get("duration_ticks", 12)),
+		"queue_position": int(activity.get("queue_position", 0)),
+		"queue_length": int(activity.get("queue_length", 0)),
 	}
 
 
@@ -2863,7 +2877,7 @@ func _replay_command(command: Dictionary) -> bool:
 	var result: Dictionary = {"ok": true}
 	match operation:
 		"ADVANCE":
-			advance(int(args.get("ticks", 0)))
+			advance(int(args.get("ticks", 0)), false)
 		"VISIT_PLACE":
 			result = visit_public_place(int(args.person_id), int(args.place_id))
 		"REFINE_NEIGHBORHOOD":
@@ -2875,7 +2889,7 @@ func _replay_command(command: Dictionary) -> bool:
 		"UPDATE_FOCUS":
 			result = update_adaptive_focus(
 				int(args.player_place_id), args.get("socially_relevant_light_ids", []),
-				int(args.light_budget)
+				int(args.light_budget), false
 			)
 		"PROMOTE":
 			result = promote_light_agent_to_persistent(int(args.agent_id), str(args.reason))

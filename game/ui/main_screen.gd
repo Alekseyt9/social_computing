@@ -376,7 +376,7 @@ func _on_action_pressed(action: String) -> void:
 
 
 func _on_advance_pressed() -> void:
-	_world.advance(60)
+	_world.advance(60, false)
 	_refresh_world_view("Прошёл один игровой час")
 
 

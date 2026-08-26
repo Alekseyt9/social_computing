@@ -42,7 +42,7 @@ func exit_interior() -> void:
 func sync_from_simulation() -> void:
 	if _world == null:
 		return
-	var adaptive: Dictionary = _world.get_adaptive_population_snapshot()
+	var adaptive: Dictionary = _world.get_adaptive_focus_view()
 	var ids: Array = adaptive.get("refined_light_ids", [])
 	var refined: Dictionary = {}
 	for value: Variant in ids:
@@ -71,9 +71,15 @@ func sync_from_simulation() -> void:
 		state["phase_label"] = str(view.get("phase_label", ""))
 		state["activity_spot_id"] = str(view.get("activity_spot_id", ""))
 		state["visual_action"] = str(view.get("visual_action", "IDLE"))
+		state["queue_position"] = int(view.get("queue_position", 0))
+		state["queue_length"] = int(view.get("queue_length", 0))
 		if not bool(state.get("traveling", false)) and not str(state.activity_spot_id).is_empty():
 			state["target"] = _activity_spot_point(
 				str(state.activity_spot_id), get_place_zone(int(state.place_id))
+			)
+		elif not bool(state.get("traveling", false)) and str(state.execution_phase) == "WAIT_FOR_SPOT":
+			state["target"] = _point_in_zone(
+				agent_id, 71 + int(_world.tick / 12), get_place_zone(int(state.place_id))
 			)
 		if bool(state.retiring) and not bool(state.traveling):
 			_citizens.erase(agent_id)
@@ -117,6 +123,8 @@ func sync_from_simulation() -> void:
 			"phase_label": str(view.get("phase_label", "")),
 			"activity_spot_id": str(view.get("activity_spot_id", "")),
 			"visual_action": str(view.get("visual_action", "IDLE")),
+			"queue_position": int(view.get("queue_position", 0)),
+			"queue_length": int(view.get("queue_length", 0)),
 		}
 		if origin_place != place_id:
 			_begin_trip(agent_id, state, place_id, str(view.activity_label))
@@ -176,6 +184,8 @@ func get_nearest_citizen(world_position: Vector2, max_distance: float) -> Dictio
 			"phase_label": str(state.get("phase_label", "")),
 			"activity_spot_id": str(state.get("activity_spot_id", "")),
 			"visual_action": str(state.get("visual_action", "IDLE")),
+			"queue_position": int(state.get("queue_position", 0)),
+			"queue_length": int(state.get("queue_length", 0)),
 		}
 	return nearest
 
@@ -254,7 +264,7 @@ func _draw() -> void:
 			draw_rect(Rect2(point + Vector2(6, -1 + bob), Vector2(5, 8)), accent.lightened(0.35))
 		elif not str(state.get("activity_spot_id", "")).is_empty():
 			draw_arc(point + Vector2(0, 13), 4.0, 0.0, TAU, 10, accent.lightened(0.45), 1.5)
-			_draw_activity_mark(point + Vector2(12, -12 + bob), str(state.get("visual_action", "IDLE")), accent)
+		_draw_activity_mark(point + Vector2(12, -12 + bob), str(state.get("visual_action", "IDLE")), accent)
 
 
 func _begin_trip(

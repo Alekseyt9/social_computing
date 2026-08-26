@@ -16,6 +16,10 @@ const ActivityStatusCardScript := preload("res://ui/activity_status_card.gd")
 
 const INTERACTION_DISTANCE := 92.0
 const INTERIOR_ORIGIN := Vector2(2600, 0)
+const CAMERA_ZOOM_MIN_ABSOLUTE := 0.58
+const CAMERA_ZOOM_MAX := 2.0
+const CAMERA_ZOOM_STEP := 1.14
+const CAMERA_ZOOM_SMOOTH_SPEED := 12.0
 const INTERACTIVE_PLACES := {
 	2: {"name": "Corner Cafe", "entrance": Vector2(345, 418), "color": Color("e6a75e")},
 	5: {"name": "Торговый квартал", "entrance": Vector2(1370, 1025), "color": Color("79c39a")},
@@ -110,6 +114,9 @@ var _save_menu_from_start := false
 var _game_started := false
 var _last_autosave_tick := -9999
 var _start_status_label: Label
+var _camera_zoom_target := 1.05
+var _camera_zoom_min := CAMERA_ZOOM_MIN_ABSOLUTE
+var _camera_bounds := Rect2(Vector2.ZERO, WorldMapScript.WORLD_SIZE)
 
 
 func _ready() -> void:
@@ -130,13 +137,14 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	_update_toast(delta)
 	_update_minimap()
+	_update_camera_zoom(delta)
 	if _gameplay_paused():
 		return
 	_simulation_accumulator += delta * _time_scale
 	if _simulation_accumulator >= 1.0:
 		var elapsed_ticks := int(_simulation_accumulator)
 		_simulation_accumulator -= float(elapsed_ticks)
-		world.advance(elapsed_ticks)
+		world.advance(elapsed_ticks, false)
 		_update_adaptive_focus(false)
 		_update_hud()
 	if not _dialogue_panel.visible:
@@ -144,6 +152,14 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index in [
+		MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN,
+	]:
+		if _can_adjust_camera_zoom():
+			var factor := CAMERA_ZOOM_STEP if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / CAMERA_ZOOM_STEP
+			_set_camera_zoom_target(_camera_zoom_target * factor)
+			get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if _start_menu_overlay != null and _start_menu_overlay.visible:
 			get_viewport().set_input_as_handled()
@@ -181,7 +197,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_T and not (
 			_dialogue_panel.visible or _social_map_overlay.visible or _debug_overlay.visible
 		):
-			world.advance(12) # One visible hour; useful for observing daily routines.
+			world.advance(12, false) # One visible hour; useful for observing daily routines.
 			_update_adaptive_focus(true)
 			_update_hud()
 			get_viewport().set_input_as_handled()
@@ -256,7 +272,7 @@ func _update_adaptive_focus(force: bool) -> void:
 	):
 		return
 	_last_adaptive_focus_tick = current_tick
-	world.update_adaptive_focus(_player_place_id(), [], 60)
+	world.update_adaptive_focus(_player_place_id(), [], 60, false)
 	if _ambient_crowd != null:
 		_ambient_crowd.sync_from_simulation()
 	_sync_active_adaptive_npcs()
@@ -328,12 +344,47 @@ func _exit_place() -> void:
 
 func _set_camera_limits(bounds: Rect2, zoom: Vector2) -> void:
 	var camera := player.get_node("Camera2D") as Camera2D
+	_camera_bounds = bounds
+	var viewport_size := get_viewport().get_visible_rect().size
+	_camera_zoom_min = clampf(maxf(
+		CAMERA_ZOOM_MIN_ABSOLUTE,
+		maxf(viewport_size.x / bounds.size.x, viewport_size.y / bounds.size.y)
+	), CAMERA_ZOOM_MIN_ABSOLUTE, CAMERA_ZOOM_MAX)
 	camera.limit_left = int(bounds.position.x)
 	camera.limit_top = int(bounds.position.y)
 	camera.limit_right = int(bounds.end.x)
 	camera.limit_bottom = int(bounds.end.y)
-	camera.zoom = zoom
+	_set_camera_zoom_target(zoom.x, true)
 	camera.reset_smoothing()
+
+
+func _can_adjust_camera_zoom() -> bool:
+	return (
+		_game_started
+		and not _dialogue_panel.visible
+		and not _social_map_overlay.visible
+		and not _debug_overlay.visible
+		and not (_start_menu_overlay != null and _start_menu_overlay.visible)
+		and not (_save_menu_overlay != null and _save_menu_overlay.visible)
+		and not (_journal_overlay != null and _journal_overlay.visible)
+		and not (_conflict_confirm_overlay != null and _conflict_confirm_overlay.visible)
+	)
+
+
+func _set_camera_zoom_target(value: float, immediate: bool = false) -> void:
+	_camera_zoom_target = clampf(value, _camera_zoom_min, CAMERA_ZOOM_MAX)
+	if immediate and player != null:
+		var camera := player.get_node("Camera2D") as Camera2D
+		camera.zoom = Vector2.ONE * _camera_zoom_target
+
+
+func _update_camera_zoom(delta: float) -> void:
+	if player == null:
+		return
+	var camera := player.get_node("Camera2D") as Camera2D
+	var weight := 1.0 - exp(-CAMERA_ZOOM_SMOOTH_SPEED * maxf(0.0, delta))
+	var value := lerpf(camera.zoom.x, _camera_zoom_target, weight)
+	camera.zoom = Vector2.ONE * value
 
 
 func _set_story_npcs_active(active: bool) -> void:
@@ -455,7 +506,7 @@ func _build_hud() -> void:
 	clock_panel.add_child(_clock_label)
 
 	var controls := Label.new()
-	controls.text = "WASD · E действие · J журнал · Space пауза · 1/2/3 скорость · Esc меню"
+	controls.text = "WASD · E действие · колесо масштаб · J журнал · Space пауза · 1/2/3 скорость"
 	controls.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	controls.position = Vector2(-455, 94)
 	controls.size = Vector2(430, 30)
@@ -1099,6 +1150,7 @@ func _capture_view_state() -> Dictionary:
 		"simulation_accumulator": _simulation_accumulator,
 		"time_scale": _time_scale,
 		"time_paused": _time_paused,
+		"camera_zoom": _camera_zoom_target,
 	}
 
 
@@ -1149,6 +1201,8 @@ func _restore_loaded_game(restored: RefCounted, view: Dictionary) -> void:
 		_set_camera_limits(_interior_map.get_camera_limits(), Vector2(0.92, 0.92))
 	else:
 		_set_camera_limits(Rect2(Vector2.ZERO, WorldMapScript.WORLD_SIZE), Vector2(1.05, 1.05))
+	if view.has("camera_zoom"):
+		_set_camera_zoom_target(float(view.camera_zoom), true)
 	_ambient_crowd.sync_from_simulation()
 	_sync_active_adaptive_npcs()
 	_last_adaptive_focus_tick = int(world.tick)
@@ -1738,7 +1792,7 @@ func _activity_plan_status_label(status: String) -> String:
 	}.get(status, status.to_lower())
 
 
-func _update_plan_panel(plans: Array[Dictionary]) -> void:
+func _update_plan_panel(plans: Array) -> void:
 	if _plan_panel == null:
 		return
 	var active_plan: Dictionary = {}

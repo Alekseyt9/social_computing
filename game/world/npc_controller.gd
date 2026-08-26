@@ -17,6 +17,7 @@ var _rng := RandomNumberGenerator.new()
 var _name_label: Label
 var _activity_label: Label
 var _walk_phase := 0.0
+var _activity_anim_phase := 0.0
 var _facing := Vector2.DOWN
 var _activity_anchor_active := false
 var _phase_progress := 0.0
@@ -54,6 +55,7 @@ func _ready() -> void:
 	_activity_label.position = Vector2(-72, 22)
 	_activity_label.size = Vector2(144, 20)
 	_activity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_activity_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_activity_label.add_theme_font_size_override("font_size", 10)
 	_activity_label.add_theme_color_override("font_color", Color("b8d4d3"))
 	_activity_label.add_theme_color_override("font_outline_color", Color("10171bdd"))
@@ -78,6 +80,7 @@ func set_movement_zone(zone: Rect2) -> void:
 
 
 func set_activity_state(state: Dictionary) -> void:
+	var was_anchored := _activity_anchor_active
 	execution_phase = str(state.get("execution_phase", "PERFORM"))
 	visual_action = str(state.get("visual_action", "IDLE"))
 	_phase_progress = clampf(float(state.get("phase_progress", 0.0)), 0.0, 1.0)
@@ -103,10 +106,15 @@ func set_activity_state(state: Dictionary) -> void:
 		)
 	elif execution_phase in ["FINISH", "INTERRUPT"]:
 		_pick_target()
+	elif execution_phase == "WAIT_FOR_SPOT" and was_anchored:
+		_pick_target()
 	queue_redraw()
 
 
 func _physics_process(delta: float) -> void:
+	if _activity_label != null and _activity_label.visible:
+		_activity_anim_phase += delta * 3.2
+		queue_redraw()
 	if movement_paused:
 		velocity = velocity.move_toward(Vector2.ZERO, 480.0 * delta)
 		move_and_slide()
@@ -159,6 +167,7 @@ func _draw() -> void:
 	draw_circle(Vector2(-3, -6 - bob) + face_offset, 1.3, Color("17242a"))
 	draw_circle(Vector2(3, -6 - bob) + face_offset, 1.3, Color("17242a"))
 	_draw_role_marker(Vector2(0, -bob))
+	_draw_activity_marker(Vector2(25, -21 - bob))
 	if _activity_anchor_active:
 		draw_arc(Vector2(0, 17), 5.0, 0.0, TAU, 10, accent.lightened(0.4), 1.5)
 	if _activity_label != null and _activity_label.visible:
@@ -186,6 +195,7 @@ func _phase_symbol(phase: String) -> String:
 	return {
 		"TRAVEL": "→", "RESERVE": "◇", "PERFORM": "●",
 		"FINISH": "✓", "INTERRUPT": "!",
+		"WAIT_FOR_SPOT": "…",
 	}.get(phase, "·")
 
 
@@ -194,4 +204,40 @@ func _phase_color(phase: String) -> Color:
 		"TRAVEL": Color("87bdd9"), "RESERVE": Color("e1bf72"),
 		"PERFORM": Color("81d19a"), "FINISH": Color("b9a5dc"),
 		"INTERRUPT": Color("e28379"),
+		"WAIT_FOR_SPOT": Color("e5ae68"),
 	}.get(phase, Color("b8d4d3"))
+
+
+func _draw_activity_marker(origin: Vector2) -> void:
+	if _activity_label == null or not _activity_label.visible:
+		return
+	var color := _phase_color(execution_phase)
+	var pulse := 1.0 + sin(_activity_anim_phase) * 0.08
+	draw_circle(origin, 11.0 * pulse, Color("132027dd"))
+	draw_arc(origin, 11.0 * pulse, 0.0, TAU, 18, color, 1.3)
+	match visual_action:
+		"TYPE", "READ":
+			draw_rect(Rect2(origin + Vector2(-6, -4), Vector2(12, 8)), color, false, 1.8)
+			draw_line(origin + Vector2(-4, 0), origin + Vector2(4, 0), color, 1.3)
+		"TALK":
+			draw_circle(origin + Vector2(-3, -1), 3.0, color, false, 1.5)
+			draw_circle(origin + Vector2(4, 2), 2.5, color.lightened(0.2), false, 1.5)
+		"DRINK", "EAT":
+			draw_rect(Rect2(origin + Vector2(-5, -3), Vector2(8, 7)), color, false, 1.7)
+			draw_arc(origin + Vector2(4, 0), 3.0, -PI * 0.5, PI * 0.5, 8, color, 1.5)
+		"SIT", "WAIT":
+			draw_line(origin + Vector2(-6, 4), origin + Vector2(6, 4), color, 2.0)
+			draw_line(origin + Vector2(-4, 0), origin + Vector2(-4, 7), color, 1.5)
+		"CRAFT", "HELP":
+			draw_line(origin + Vector2(-5, 5), origin + Vector2(5, -5), color, 2.0)
+			draw_circle(origin + Vector2(4, -4), 2.5, color, false, 1.5)
+		"EXERCISE":
+			draw_line(origin + Vector2(-6, 0), origin + Vector2(6, 0), color, 2.0)
+			draw_circle(origin + Vector2(-7, 0), 2.5, color)
+			draw_circle(origin + Vector2(7, 0), 2.5, color)
+		"WALK", "STROLL", "APPROACH_SPOT", "LEAVE_SPOT":
+			draw_line(origin + Vector2(-5, 0), origin + Vector2(5, 0), color, 2.0)
+			draw_line(origin + Vector2(2, -3), origin + Vector2(6, 0), color, 2.0)
+			draw_line(origin + Vector2(2, 3), origin + Vector2(6, 0), color, 2.0)
+		_:
+			draw_circle(origin, 2.5, color)
