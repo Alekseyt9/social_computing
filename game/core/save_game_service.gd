@@ -3,6 +3,7 @@ extends RefCounted
 
 const SAVE_VERSION := 1
 const SLOT_COUNT := 3
+const AUTO_SAVE_SLOT := 0
 const SAVE_DIRECTORY := "user://saves"
 
 
@@ -12,7 +13,7 @@ static func save_slot(
 	view_data: Dictionary,
 	storage_directory: String = SAVE_DIRECTORY
 ) -> Dictionary:
-	if slot < 1 or slot > SLOT_COUNT:
+	if not _is_valid_slot(slot):
 		return {"ok": false, "error": "INVALID_SLOT"}
 	var directory_path := ProjectSettings.globalize_path(storage_directory)
 	var directory_error := DirAccess.make_dir_recursive_absolute(directory_path)
@@ -21,6 +22,7 @@ static func save_slot(
 	var metadata := {
 		"slot": slot,
 		"saved_at": Time.get_datetime_string_from_system(false, true),
+		"saved_unix": Time.get_unix_time_from_system(),
 		"tick": int(world_data.get("integrity", {}).get("tick", 0)),
 		"checksum": str(world_data.get("integrity", {}).get("checksum", "")),
 	}
@@ -58,7 +60,7 @@ static func save_slot(
 
 
 static func load_slot(slot: int, storage_directory: String = SAVE_DIRECTORY) -> Dictionary:
-	if slot < 1 or slot > SLOT_COUNT:
+	if not _is_valid_slot(slot):
 		return {"ok": false, "error": "INVALID_SLOT"}
 	var path := _slot_path(slot, storage_directory)
 	if not FileAccess.file_exists(path):
@@ -98,5 +100,34 @@ static func get_slot_metadata(
 	return metadata
 
 
+static func get_latest_save(storage_directory: String = SAVE_DIRECTORY) -> Dictionary:
+	var latest: Dictionary = {}
+	for slot in range(AUTO_SAVE_SLOT, SLOT_COUNT + 1):
+		var loaded := load_slot(slot, storage_directory)
+		if not bool(loaded.get("ok", false)):
+			continue
+		var saved_unix := float(loaded.metadata.get("saved_unix", 0.0))
+		var latest_unix := float(latest.get("metadata", {}).get("saved_unix", 0.0))
+		var is_newer := latest.is_empty() or saved_unix > latest_unix
+		if not is_newer and is_equal_approx(saved_unix, latest_unix):
+			is_newer = str(loaded.metadata.get("saved_at", "")) > str(
+				latest.get("metadata", {}).get("saved_at", "")
+			)
+		if is_newer:
+			latest = loaded
+			latest["slot"] = slot
+	return latest
+
+
+static func has_any_save(storage_directory: String = SAVE_DIRECTORY) -> bool:
+	return not get_latest_save(storage_directory).is_empty()
+
+
 static func _slot_path(slot: int, storage_directory: String) -> String:
+	if slot == AUTO_SAVE_SLOT:
+		return "%s/autosave.json" % storage_directory
 	return "%s/slot_%d.json" % [storage_directory, slot]
+
+
+static func _is_valid_slot(slot: int) -> bool:
+	return slot >= AUTO_SAVE_SLOT and slot <= SLOT_COUNT

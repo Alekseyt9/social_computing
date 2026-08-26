@@ -131,6 +131,11 @@ static func _action_costs(action_type: String, context: Dictionary) -> Dictionar
 			defaults.personal_cost = 0.22
 			defaults.risk = 0.28
 			defaults.secrecy = 0.35
+		"AskDistrictSupport":
+			defaults.expected_benefit = 0.40
+			defaults.personal_cost = 0.15
+			defaults.risk = 0.10
+			defaults.secrecy = 0.05
 
 	# Persistent NPCs read district fields as ambient pressure. The field never
 	# decides an action by itself; it modifies the same explicit utility costs.

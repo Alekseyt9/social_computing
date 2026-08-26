@@ -58,6 +58,12 @@ func _run() -> void:
 	if not overwritten.ok:
 		_fail("Existing save slot could not be replaced safely: %s" % overwritten)
 		return
+	var autosaved: Dictionary = SaveGameServiceScript.save_slot(
+		SaveGameServiceScript.AUTO_SAVE_SLOT, world.export_save_data(), view, TEST_DIRECTORY
+	)
+	if not autosaved.ok or SaveGameServiceScript.get_latest_save(TEST_DIRECTORY).is_empty():
+		_fail("Autosave/latest-save discovery failed")
+		return
 	var loaded: Dictionary = SaveGameServiceScript.load_slot(1, TEST_DIRECTORY)
 	if not loaded.ok or int(loaded.view.interior_place_id) != 5:
 		_fail("Save envelope/view state did not load: %s" % loaded)
@@ -97,12 +103,15 @@ func _cleanup() -> void:
 	var slot_path := ProjectSettings.globalize_path("%s/slot_1.json" % TEST_DIRECTORY)
 	var temp_path := slot_path + ".tmp"
 	var backup_path := slot_path + ".bak"
+	var autosave_path := ProjectSettings.globalize_path("%s/autosave.json" % TEST_DIRECTORY)
 	if FileAccess.file_exists(slot_path):
 		DirAccess.remove_absolute(slot_path)
 	if FileAccess.file_exists(temp_path):
 		DirAccess.remove_absolute(temp_path)
 	if FileAccess.file_exists(backup_path):
 		DirAccess.remove_absolute(backup_path)
+	if FileAccess.file_exists(autosave_path):
+		DirAccess.remove_absolute(autosave_path)
 	var directory_path := ProjectSettings.globalize_path(TEST_DIRECTORY)
 	if DirAccess.dir_exists_absolute(directory_path):
 		DirAccess.remove_absolute(directory_path)

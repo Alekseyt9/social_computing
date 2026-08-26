@@ -131,7 +131,7 @@ func _test_place_and_active_lifecycle() -> void:
 	if scene.world.get_current_place_id(scene.world.player_id) != 5:
 		_fail("Shopping interior entry was not recorded in canonical world state")
 		return
-	print("ACTIVITY_PLACES_OK context=ERRANDS money_conserved=true interiors=3 active_to_persistent_to_active=true person=%d" % agent_id)
+	print("ACTIVITY_PLACES_OK context=ERRANDS money_conserved=true interiors=5 active_to_persistent_to_active=true person=%d" % agent_id)
 	scene.queue_free()
 	quit(0)
 

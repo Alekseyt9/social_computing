@@ -25,6 +25,8 @@ static func resolve_state(
 		"DAY_WORK":
 			if time_of_day >= 84 and time_of_day < 204:
 				return _state(work_place_id, "WORK", "работает")
+			if time_of_day >= 204 and time_of_day < 210:
+				return _state(7, "HEALTH", "заходит в поликлинику")
 			if time_of_day >= 204 and time_of_day < 228:
 				return _state(5, "ERRANDS", "занимается покупками")
 			if time_of_day >= 228 and time_of_day < 246:
@@ -35,12 +37,16 @@ static func resolve_state(
 				return _state(4, "LEISURE", "гуляет в парке")
 			if time_of_day >= 126 and time_of_day < 150:
 				return _state(5, "ERRANDS", "занимается делами")
+			if time_of_day >= 150 and time_of_day < 156:
+				return _state(8, "CRAFT", "занимается делом в мастерских")
 			if time_of_day >= 156 and time_of_day < 264:
 				return _state(work_place_id, "WORK", "работает в вечернюю смену")
 			return _state(home_place_id, "HOME", "проводит время дома")
 		"FLEXIBLE":
 			if time_of_day >= 90 and time_of_day < 114:
 				return _state(6, "COMMUNITY", "занимается делами в общественном центре")
+			if time_of_day >= 114 and time_of_day < 120:
+				return _state(8, "CRAFT", "работает над личным проектом")
 			if time_of_day >= 120 and time_of_day < 192:
 				return _state(work_place_id, "WORK", "работает по гибкому графику")
 			if time_of_day >= 192 and time_of_day < 216:
@@ -51,6 +57,8 @@ static func resolve_state(
 		_:
 			if time_of_day >= 96 and time_of_day < 126:
 				return _state(6, "JOB_SEARCH", "ищет работу в общественном центре")
+			if time_of_day >= 126 and time_of_day < 132:
+				return _state(7, "HEALTH", "пришёл на приём")
 			if time_of_day >= 132 and time_of_day < 156:
 				return _state(2, "SOCIAL", "общается в кафе")
 			if time_of_day >= 156 and time_of_day < 174:

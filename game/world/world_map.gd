@@ -43,6 +43,7 @@ func _draw() -> void:
 	_draw_park()
 	_draw_east_square()
 	_draw_street_details()
+	_draw_sidewalks_and_props()
 	_draw_aurora_entrance()
 
 
@@ -102,6 +103,33 @@ func _draw_street_details() -> void:
 	for light_pos in [Vector2(650, 445), Vector2(1110, 445), Vector2(650, 700), Vector2(1110, 700), Vector2(1640, 430), Vector2(1815, 430), Vector2(1640, 740), Vector2(1815, 740)]:
 		draw_circle(light_pos + Vector2(3, 5), 10, Color(0, 0, 0, 0.3))
 		draw_circle(light_pos, 8, Color("f2d38a"))
+
+
+func _draw_sidewalks_and_props() -> void:
+	# Pavement edges make the walkable street network legible at a glance.
+	for y in [430.0, 690.0, 1030.0, 1175.0]:
+		draw_line(Vector2(0, y), Vector2(WORLD_SIZE.x, y), Color("87918c"), 3.0)
+	for x in [675.0, 1075.0, 1640.0, 1815.0]:
+		draw_line(Vector2(x, 0), Vector2(x, WORLD_SIZE.y), Color("87918c"), 3.0)
+	# Bus stops, bicycles, planters and parked service vehicles are landmarks,
+	# not interactive objects; they visually distinguish the neighbourhoods.
+	for stop in [Vector2(740, 650), Vector2(1555, 650), Vector2(1860, 1090)]:
+		draw_rect(Rect2(stop, Vector2(54, 8)), Color("1d292e"))
+		draw_line(stop + Vector2(5, 0), stop + Vector2(5, -34), Color("7ccbd2"), 4.0)
+		draw_rect(Rect2(stop + Vector2(-2, -40), Vector2(28, 14)), Color("3f747b"))
+	for bicycle in [Vector2(620, 720), Vector2(1110, 760), Vector2(1780, 780)]:
+		draw_circle(bicycle, 8.0, Color("9aa7a5"), false, 2.0)
+		draw_circle(bicycle + Vector2(20, 0), 8.0, Color("9aa7a5"), false, 2.0)
+		draw_line(bicycle, bicycle + Vector2(10, -10), Color("d9b66e"), 2.0)
+		draw_line(bicycle + Vector2(10, -10), bicycle + Vector2(20, 0), Color("d9b66e"), 2.0)
+	for vehicle in [Rect2(720, 535, 82, 36), Rect2(1470, 574, 92, 38), Rect2(1850, 1060, 86, 36)]:
+		draw_rect(vehicle, Color("415864"))
+		draw_rect(Rect2(vehicle.position + Vector2(18, 5), Vector2(vehicle.size.x - 36, 12)), Color("83a7aa"))
+		draw_circle(vehicle.position + Vector2(18, vehicle.size.y), 6.0, Color("151c20"))
+		draw_circle(vehicle.end - Vector2(18, 0), 6.0, Color("151c20"))
+	for planter in [Vector2(1140, 670), Vector2(1600, 1020), Vector2(1818, 750), Vector2(600, 1040)]:
+		draw_rect(Rect2(planter - Vector2(15, 8), Vector2(30, 16)), Color("644c38"))
+		draw_circle(planter - Vector2(0, 10), 12.0, Color("43805a"))
 
 
 func _draw_crosswalk(origin: Vector2, horizontal: bool) -> void:

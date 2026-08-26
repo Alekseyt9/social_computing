@@ -11,6 +11,7 @@ const SocialMapPanelScript := preload("res://ui/social_map_panel.gd")
 const AmbientCrowdLayerScript := preload("res://world/ambient_crowd_layer.gd")
 const PlaceInteriorScript := preload("res://world/place_interior.gd")
 const SaveGameServiceScript := preload("res://core/save_game_service.gd")
+const DistrictMinimapScript := preload("res://ui/district_minimap.gd")
 
 const INTERACTION_DISTANCE := 92.0
 const INTERIOR_ORIGIN := Vector2(2600, 0)
@@ -18,6 +19,8 @@ const INTERACTIVE_PLACES := {
 	2: {"name": "Corner Cafe", "entrance": Vector2(345, 418), "color": Color("e6a75e")},
 	5: {"name": "Торговый квартал", "entrance": Vector2(1370, 1025), "color": Color("79c39a")},
 	6: {"name": "Общественный центр", "entrance": Vector2(2060, 420), "color": Color("e2c36f")},
+	7: {"name": "Районная поликлиника", "entrance": Vector2(2060, 1035), "color": Color("81b6d9")},
+	8: {"name": "Двор мастерских", "entrance": Vector2(1410, 1195), "color": Color("cc8d68")},
 }
 const NPC_DATA := [
 	{"id": 2, "position": Vector2(745, 615), "zone": Rect2(725, 555, 95, 105), "color": Color("db7f8e")},
@@ -87,6 +90,17 @@ var _toast_remaining: float = 0.0
 var _save_menu_overlay: PanelContainer
 var _save_slot_labels: Dictionary = {}
 var _save_status_label: Label
+var _save_slot_save_buttons: Dictionary = {}
+var _start_menu_overlay: PanelContainer
+var _journal_overlay: PanelContainer
+var _journal_text: RichTextLabel
+var _minimap: Control
+var _time_scale := 1.0
+var _time_paused := false
+var _save_menu_from_start := false
+var _game_started := false
+var _last_autosave_tick := -9999
+var _start_status_label: Label
 
 
 func _ready() -> void:
@@ -101,13 +115,15 @@ func _ready() -> void:
 	add_child(groq_client)
 	_update_hud()
 	_update_adaptive_focus(true)
+	_show_start_menu()
 
 
 func _process(delta: float) -> void:
 	_update_toast(delta)
-	if _save_menu_overlay != null and _save_menu_overlay.visible:
+	_update_minimap()
+	if _gameplay_paused():
 		return
-	_simulation_accumulator += delta
+	_simulation_accumulator += delta * _time_scale
 	if _simulation_accumulator >= 1.0:
 		var elapsed_ticks := int(_simulation_accumulator)
 		_simulation_accumulator -= float(elapsed_ticks)
@@ -120,9 +136,17 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		if _start_menu_overlay != null and _start_menu_overlay.visible:
+			get_viewport().set_input_as_handled()
+			return
 		if _save_menu_overlay != null and _save_menu_overlay.visible:
 			if event.keycode == KEY_ESCAPE:
 				_toggle_save_menu()
+			get_viewport().set_input_as_handled()
+			return
+		if _journal_overlay != null and _journal_overlay.visible:
+			if event.keycode in [KEY_ESCAPE, KEY_J]:
+				_toggle_journal()
 			get_viewport().set_input_as_handled()
 			return
 		if event.keycode == KEY_F5:
@@ -130,6 +154,15 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_F9:
 			_load_from_slot(1)
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_J:
+			_toggle_journal()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_SPACE:
+			_set_time_paused(not _time_paused)
+			get_viewport().set_input_as_handled()
+		elif event.keycode in [KEY_1, KEY_2, KEY_3]:
+			_set_time_scale({KEY_1: 1.0, KEY_2: 4.0, KEY_3: 12.0}[event.keycode])
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_T and not (
 			_dialogue_panel.visible or _social_map_overlay.visible or _debug_overlay.visible
@@ -221,6 +254,10 @@ func _player_place_id() -> int:
 	var position_in_world := player.global_position
 	if position_in_world.x >= 1780.0 and position_in_world.y < 780.0:
 		return 6 # Community center and east square
+	if position_in_world.x >= 1780.0 and position_in_world.y >= 780.0:
+		return 7 # Clinic quarter
+	if position_in_world.y >= 1140.0 and position_in_world.x >= 1080.0:
+		return 8 # Workshop yard
 	if position_in_world.y >= 1000.0 and position_in_world.x >= 1080.0:
 		return 5 # Shopping and workshop quarter
 	if position_in_world.x <= 540.0 and position_in_world.y >= 430.0 and position_in_world.y < 760.0:
@@ -254,6 +291,7 @@ func _enter_place(place_id: int) -> void:
 	_toast_label.text = "Вы вошли: %s · посетители зависят от расписания" % str(definition.name)
 	_toast_remaining = 3.0
 	_toast_panel.visible = true
+	_autosave("вход в %s" % str(definition.name))
 
 
 func _exit_place() -> void:
@@ -271,6 +309,7 @@ func _exit_place() -> void:
 	_update_adaptive_focus(true)
 	_update_hud()
 	_update_nearby_npc()
+	_autosave("возвращение на улицу")
 
 
 func _set_camera_limits(bounds: Rect2, zoom: Vector2) -> void:
@@ -356,7 +395,7 @@ func _build_npcs() -> void:
 		var npc := NpcControllerScript.new()
 		var person_id: int = data.id
 		var identity: Dictionary = world.get_visible_identity(world.player_id, person_id)
-		npc.setup(person_id, identity.name, data.zone, data.color)
+		npc.setup(person_id, identity.name, data.zone, data.color, world.get_person_role(person_id))
 		npc.name = "NPC_%d" % person_id
 		npc.position = data.position
 		add_child(npc)
@@ -401,7 +440,7 @@ func _build_hud() -> void:
 	clock_panel.add_child(_clock_label)
 
 	var controls := Label.new()
-	controls.text = "WASD · E диалог · T +1ч · Esc меню · F5 сохранить · F9 загрузить"
+	controls.text = "WASD · E действие · J журнал · Space пауза · 1/2/3 скорость · Esc меню"
 	controls.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	controls.position = Vector2(-455, 94)
 	controls.size = Vector2(430, 30)
@@ -431,6 +470,9 @@ func _build_hud() -> void:
 	_build_save_menu(canvas)
 	_build_social_map(canvas)
 	_build_debug_inspector(canvas)
+	_build_minimap(canvas)
+	_build_journal(canvas)
+	_build_start_menu(canvas)
 
 
 func _build_district_pulse(canvas: CanvasLayer) -> void:
@@ -501,6 +543,132 @@ func _build_toast(canvas: CanvasLayer) -> void:
 	_toast_panel.add_child(_toast_label)
 
 
+func _build_minimap(canvas: CanvasLayer) -> void:
+	var panel := PanelContainer.new()
+	panel.name = "DistrictMinimapPanel"
+	panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	panel.position = Vector2(-310, -220)
+	panel.size = Vector2(288, 192)
+	panel.add_theme_stylebox_override(
+		"panel", _panel_style(Color("10191fe8"), Color("55737a"), 12)
+	)
+	canvas.add_child(panel)
+	var box := VBoxContainer.new()
+	box.name = "MinimapContent"
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "КАРТА РАЙОНА"
+	title.add_theme_font_size_override("font_size", 12)
+	title.add_theme_color_override("font_color", Color("82cbd1"))
+	box.add_child(title)
+	_minimap = DistrictMinimapScript.new()
+	_minimap.name = "DistrictMinimap"
+	_minimap.custom_minimum_size = Vector2(260, 145)
+	_minimap.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(_minimap)
+
+
+func _build_journal(canvas: CanvasLayer) -> void:
+	_journal_overlay = PanelContainer.new()
+	_journal_overlay.name = "SocialJournal"
+	_journal_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_journal_overlay.position = Vector2(-520, -320)
+	_journal_overlay.size = Vector2(1040, 640)
+	_journal_overlay.add_theme_stylebox_override(
+		"panel", _panel_style(Color("0d171cfa"), Color("d0a85e"), 16)
+	)
+	_journal_overlay.visible = false
+	canvas.add_child(_journal_overlay)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 9)
+	_journal_overlay.add_child(box)
+	var top := HBoxContainer.new()
+	box.add_child(top)
+	var title := Label.new()
+	title.text = "СОЦИАЛЬНЫЙ ЖУРНАЛ"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color("efcd88"))
+	top.add_child(title)
+	var close := Button.new()
+	close.text = "Закрыть  [J]"
+	close.pressed.connect(_toggle_journal)
+	_style_button(close, false)
+	top.add_child(close)
+	_journal_text = RichTextLabel.new()
+	_journal_text.bbcode_enabled = true
+	_journal_text.scroll_active = true
+	_journal_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_journal_text.add_theme_font_size_override("normal_font_size", 15)
+	_journal_text.add_theme_color_override("default_color", Color("d8e0dc"))
+	box.add_child(_journal_text)
+
+
+func _build_start_menu(canvas: CanvasLayer) -> void:
+	_start_menu_overlay = PanelContainer.new()
+	_start_menu_overlay.name = "StartMenu"
+	_start_menu_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_start_menu_overlay.add_theme_stylebox_override(
+		"panel", _panel_style(Color("081116fd"), Color("42666e"), 0)
+	)
+	canvas.add_child(_start_menu_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_start_menu_overlay.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(620, 560)
+	card.add_theme_stylebox_override(
+		"panel", _panel_style(Color("142229"), Color("79cbd2"), 18)
+	)
+	center.add_child(card)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 15)
+	card.add_child(box)
+	var title := Label.new()
+	title.text = "AURORA DISTRICT"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 38)
+	title.add_theme_color_override("font_color", Color("91dce1"))
+	box.add_child(title)
+	var subtitle := Label.new()
+	subtitle.text = "Социальный immersive sim · живой район"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.add_theme_font_size_override("font_size", 16)
+	subtitle.add_theme_color_override("font_color", Color("d0d9d4"))
+	box.add_child(subtitle)
+	var continue_button := Button.new()
+	continue_button.name = "ContinueButton"
+	continue_button.text = "ПРОДОЛЖИТЬ"
+	continue_button.custom_minimum_size = Vector2(0, 58)
+	continue_button.disabled = not SaveGameServiceScript.has_any_save()
+	continue_button.pressed.connect(_continue_latest_game)
+	_style_button(continue_button, true)
+	box.add_child(continue_button)
+	for definition: Dictionary in [
+		{"text": "НОВАЯ ИГРА", "callback": _start_new_game},
+		{"text": "ЗАГРУЗИТЬ", "callback": _open_load_menu_from_start},
+		{"text": "ВЫХОД", "callback": _quit_game},
+	]:
+		var button := Button.new()
+		button.text = str(definition.text)
+		button.custom_minimum_size = Vector2(0, 54)
+		button.pressed.connect(definition.callback)
+		_style_button(button, false)
+		box.add_child(button)
+	var note := Label.new()
+	note.text = "Мир работает детерминированно; реплики Groq не управляют решениями NPC."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", 13)
+	note.add_theme_color_override("font_color", Color("809ba0"))
+	box.add_child(note)
+	_start_status_label = Label.new()
+	_start_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_start_status_label.add_theme_font_size_override("font_size", 13)
+	_start_status_label.add_theme_color_override("font_color", Color("d99a7e"))
+	box.add_child(_start_status_label)
+
+
 func _build_save_menu(canvas: CanvasLayer) -> void:
 	_save_menu_overlay = PanelContainer.new()
 	_save_menu_overlay.name = "SaveLoadMenu"
@@ -549,6 +717,7 @@ func _build_save_menu(canvas: CanvasLayer) -> void:
 		save_button.pressed.connect(_save_to_slot.bind(slot))
 		_style_button(save_button, true)
 		row.add_child(save_button)
+		_save_slot_save_buttons[slot] = save_button
 		var load_button := Button.new()
 		load_button.text = "Загрузить"
 		load_button.custom_minimum_size = Vector2(130, 46)
@@ -566,6 +735,21 @@ func _build_save_menu(canvas: CanvasLayer) -> void:
 	close_button.pressed.connect(_toggle_save_menu)
 	_style_button(close_button, false)
 	box.add_child(close_button)
+	var menu_row := HBoxContainer.new()
+	menu_row.add_theme_constant_override("separation", 10)
+	box.add_child(menu_row)
+	var main_menu_button := Button.new()
+	main_menu_button.text = "Главное меню"
+	main_menu_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_menu_button.pressed.connect(_return_to_start_menu)
+	_style_button(main_menu_button, false)
+	menu_row.add_child(main_menu_button)
+	var exit_button := Button.new()
+	exit_button.text = "Выйти из игры"
+	exit_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	exit_button.pressed.connect(_quit_game)
+	_style_button(exit_button, false)
+	menu_row.add_child(exit_button)
 	_refresh_save_slots()
 
 
@@ -623,11 +807,130 @@ func _toggle_debug_inspector() -> void:
 	_sync_player_input()
 
 
+func _show_start_menu() -> void:
+	_game_started = false
+	_start_menu_overlay.visible = true
+	_start_status_label.text = ""
+	_save_menu_overlay.visible = false
+	_journal_overlay.visible = false
+	var continue_button := _start_menu_overlay.find_child("ContinueButton", true, false) as Button
+	if continue_button != null:
+		continue_button.disabled = not SaveGameServiceScript.has_any_save()
+	_apply_motion_pause()
+	_sync_player_input()
+
+
+func _start_new_game() -> void:
+	_save_menu_from_start = false
+	var fresh_world := SimulationWorldScript.new(20250308)
+	_restore_loaded_game(fresh_world, {
+		"player": {"x": 790.0, "y": 585.0},
+		"outdoor_return": {"x": 790.0, "y": 585.0},
+		"interior_place_id": -1,
+		"story_npc_positions": [],
+		"simulation_accumulator": 0.0,
+		"time_scale": 1.0,
+		"time_paused": false,
+	})
+	_game_started = true
+	_start_menu_overlay.visible = false
+	_set_time_paused(false)
+	_show_save_status("Новая история началась", true)
+
+
+func _continue_latest_game() -> void:
+	var latest: Dictionary = SaveGameServiceScript.get_latest_save()
+	if latest.is_empty():
+		return
+	if _restore_save_envelope(latest):
+		_game_started = true
+		_save_menu_from_start = false
+		_start_menu_overlay.visible = false
+		_apply_motion_pause()
+		_sync_player_input()
+		_show_save_status("Продолжено последнее сохранение", true)
+	else:
+		_start_status_label.text = "Последнее сохранение повреждено или создано несовместимой версией."
+
+
+func _open_load_menu_from_start() -> void:
+	_save_menu_from_start = true
+	_start_menu_overlay.visible = false
+	_save_menu_overlay.visible = true
+	for button: Button in _save_slot_save_buttons.values():
+		button.disabled = true
+	_refresh_save_slots()
+	_save_status_label.text = "Выберите слот для загрузки"
+	_sync_player_input()
+
+
+func _return_to_start_menu() -> void:
+	_save_menu_from_start = false
+	_show_start_menu()
+
+
+func _quit_game() -> void:
+	get_tree().quit()
+
+
+func _toggle_journal() -> void:
+	_journal_overlay.visible = not _journal_overlay.visible
+	if _journal_overlay.visible:
+		_social_map_overlay.visible = false
+		_debug_overlay.visible = false
+		_refresh_journal()
+	_apply_motion_pause()
+	_sync_player_input()
+
+
+func _set_time_paused(paused: bool) -> void:
+	_time_paused = paused
+	_apply_motion_pause()
+	_sync_player_input()
+	_update_hud()
+
+
+func _set_time_scale(value: float) -> void:
+	_time_scale = clampf(value, 1.0, 12.0)
+	_time_paused = false
+	_apply_motion_pause()
+	_sync_player_input()
+	_update_hud()
+
+
+func _gameplay_paused() -> bool:
+	return (
+		not _game_started or _time_paused
+		or (_start_menu_overlay != null and _start_menu_overlay.visible)
+		or (_save_menu_overlay != null and _save_menu_overlay.visible)
+		or (_journal_overlay != null and _journal_overlay.visible)
+	)
+
+
+func _apply_motion_pause() -> void:
+	var paused := _gameplay_paused()
+	if _ambient_crowd != null:
+		_ambient_crowd.motion_paused = paused
+	for person_id: int in _npc_by_id:
+		var npc: CharacterBody2D = _npc_by_id[person_id]
+		if is_instance_valid(npc):
+			npc.movement_paused = paused or npc == _dialogue_npc
+
+
 func _toggle_save_menu() -> void:
-	_save_menu_overlay.visible = not _save_menu_overlay.visible
+	if _save_menu_overlay.visible and _save_menu_from_start:
+		_save_menu_overlay.visible = false
+		_start_menu_overlay.visible = true
+	else:
+		_save_menu_overlay.visible = not _save_menu_overlay.visible
 	if _save_menu_overlay.visible:
 		_refresh_save_slots()
 		_save_status_label.text = "F5/F9 используют слот 1"
+		for button: Button in _save_slot_save_buttons.values():
+			button.disabled = _save_menu_from_start
+	elif not _save_menu_from_start:
+		_save_menu_from_start = false
+	_apply_motion_pause()
 	_sync_player_input()
 
 
@@ -650,12 +953,34 @@ func _load_from_slot(slot: int) -> void:
 	if not bool(loaded.get("ok", false)):
 		_show_save_status("Слот %d пуст или повреждён" % slot, false)
 		return
-	var restored: RefCounted = SimulationWorldScript.create_from_save_data(loaded.world)
-	if restored == null:
+	if not _restore_save_envelope(loaded):
 		_show_save_status("Контрольная сумма слота %d не совпала" % slot, false)
 		return
-	_restore_loaded_game(restored, loaded.view)
+	_game_started = true
+	_start_menu_overlay.visible = false
+	_save_menu_from_start = false
+	_apply_motion_pause()
+	_sync_player_input()
 	_show_save_status("Слот %d загружен" % slot, true)
+
+
+func _restore_save_envelope(loaded: Dictionary) -> bool:
+	var restored: RefCounted = SimulationWorldScript.create_from_save_data(loaded.world)
+	if restored == null:
+		return false
+	_restore_loaded_game(restored, loaded.view)
+	return true
+
+
+func _autosave(reason: String) -> void:
+	if not _game_started:
+		return
+	var result := SaveGameServiceScript.save_slot(
+		SaveGameServiceScript.AUTO_SAVE_SLOT, world.export_save_data(), _capture_view_state()
+	)
+	if bool(result.get("ok", false)):
+		_last_autosave_tick = int(world.tick)
+		_show_save_status("Автосохранение · %s" % reason, true)
 
 
 func _capture_view_state() -> Dictionary:
@@ -677,6 +1002,8 @@ func _capture_view_state() -> Dictionary:
 		"interior_place_id": int(_current_interior.get("id", -1)),
 		"story_npc_positions": story_positions,
 		"simulation_accumulator": _simulation_accumulator,
+		"time_scale": _time_scale,
+		"time_paused": _time_paused,
 	}
 
 
@@ -710,6 +1037,8 @@ func _restore_loaded_game(restored: RefCounted, view: Dictionary) -> void:
 				float(position_state.get("x", 0.0)), float(position_state.get("y", 0.0))
 			)
 	_simulation_accumulator = float(view.get("simulation_accumulator", 0.0))
+	_time_scale = clampf(float(view.get("time_scale", 1.0)), 1.0, 12.0)
+	_time_paused = bool(view.get("time_paused", false))
 	var interior_place_id := int(view.get("interior_place_id", -1))
 	if INTERACTIVE_PLACES.has(interior_place_id):
 		var definition: Dictionary = INTERACTIVE_PLACES[interior_place_id]
@@ -731,6 +1060,9 @@ func _restore_loaded_game(restored: RefCounted, view: Dictionary) -> void:
 	_update_npc_labels()
 	_update_hud()
 	_save_menu_overlay.visible = false
+	_journal_overlay.visible = false
+	_start_menu_overlay.visible = false
+	_apply_motion_pause()
 	_sync_player_input()
 	_update_nearby_npc()
 
@@ -761,8 +1093,11 @@ func _show_save_status(message: String, success: bool) -> void:
 
 func _sync_player_input() -> void:
 	player.input_enabled = not (
+		not _game_started or _time_paused or
 		_dialogue_panel.visible or _social_map_overlay.visible or _debug_overlay.visible
 		or (_save_menu_overlay != null and _save_menu_overlay.visible)
+		or (_start_menu_overlay != null and _start_menu_overlay.visible)
+		or (_journal_overlay != null and _journal_overlay.visible)
 	)
 	if not player.input_enabled:
 		player.velocity = Vector2.ZERO
@@ -829,9 +1164,14 @@ func _build_dialogue_panel(canvas: CanvasLayer) -> void:
 	_conversation_label.add_theme_font_size_override("font_size", 17)
 	_conversation_label.add_theme_color_override("font_color", Color("f0eee5"))
 	content.add_child(_conversation_label)
+	var action_scroll := ScrollContainer.new()
+	action_scroll.custom_minimum_size = Vector2(0, 56)
+	action_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	action_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	content.add_child(action_scroll)
 	_action_row = HBoxContainer.new()
 	_action_row.add_theme_constant_override("separation", 10)
-	content.add_child(_action_row)
+	action_scroll.add_child(_action_row)
 	_status_label = Label.new()
 	_status_label.add_theme_font_size_override("font_size", 12)
 	_status_label.add_theme_color_override("font_color", Color("86a9ae"))
@@ -920,7 +1260,7 @@ func _spawn_adaptive_npc(agent_id: int, citizen: Dictionary) -> CharacterBody2D:
 	var identity: Dictionary = world.get_visible_identity(world.player_id, agent_id)
 	var zone: Rect2 = _ambient_crowd.get_place_zone(int(citizen.place_id))
 	var accent: Color = citizen.get("accent", Color("8796a0"))
-	npc.setup(agent_id, str(identity.name), zone, accent)
+	npc.setup(agent_id, str(identity.name), zone, accent, world.get_person_role(agent_id))
 	npc.name = "AdaptiveNPC_%d" % agent_id
 	npc.position = citizen.position
 	add_child(npc)
@@ -973,11 +1313,12 @@ func _close_dialogue() -> void:
 		_dialogue_npc.movement_paused = false
 	_dialogue_npc = null
 	_dialogue_panel.visible = false
-	player.input_enabled = true
 	_pending_act = {}
 	_pending_fallback = ""
 	_pending_player_line = ""
 	_sync_active_adaptive_npcs()
+	_apply_motion_pause()
+	_sync_player_input()
 	_update_nearby_npc()
 
 
@@ -1008,6 +1349,7 @@ func _perform_model_action(action: Dictionary) -> void:
 	if not result.ok:
 		_conversation_label.text = "Сейчас это действие недоступно (%s). Сначала узнайте нужную связь." % result.error
 		return
+	_autosave("важное социальное действие")
 	_set_action_buttons_disabled(true)
 	_pending_act = result.communicative_act
 	_pending_fallback = result.template_response
@@ -1108,6 +1450,7 @@ func _open_aurora_entrance() -> void:
 	if result.ok:
 		_conversation_label.text = "Пропуск подтверждён. Цель достигнута: вы вошли на закрытое мероприятие."
 		_status_label.text = "Результат вычислен по факту владения пропуском."
+		_autosave("цель Aurora выполнена")
 	else:
 		_conversation_label.text = "Доступ пока закрыт: модель мира не нашла у вас действующего пропуска."
 		_status_label.text = "Требование модели: действующий Aurora access token"
@@ -1140,8 +1483,11 @@ func _update_hud() -> void:
 	var minute_of_day := (absolute_clock_ticks % 288) * 5
 	var hour := int(minute_of_day / 60)
 	var minute := minute_of_day % 60
-	_clock_label.text = "День %d  ·  %02d:%02d" % [day, hour, minute]
+	var speed_label := "ПАУЗА" if _time_paused else "×%d" % int(_time_scale)
+	_clock_label.text = "День %d  ·  %02d:%02d  ·  %s" % [day, hour, minute, speed_label]
 	var goal: Dictionary = world.get_goal_state(world.player_id)
+	if str(goal.stage) == "COMPLETED":
+		goal = world.get_district_project_state(world.player_id)
 	_objective_label.text = "%s\n%s" % [goal.title, goal.hint]
 	var tasks: Array[Dictionary] = world.get_active_tasks_for(world.player_id)
 	if not tasks.is_empty():
@@ -1152,6 +1498,57 @@ func _update_hud() -> void:
 	_update_district_pulse()
 	_update_news_feed()
 	_refresh_debug_inspector()
+	if _journal_overlay != null and _journal_overlay.visible:
+		_refresh_journal()
+
+
+func _refresh_journal() -> void:
+	if _journal_text == null:
+		return
+	var journal: Dictionary = world.get_player_journal_view(world.player_id)
+	var primary: Dictionary = journal.primary_goal
+	var project: Dictionary = journal.district_project
+	var lines := PackedStringArray([
+		"[color=#8ed9de][font_size=20]ГЛАВНЫЕ ЦЕЛИ[/font_size][/color]",
+		"[b]%s[/b] · %s" % [str(primary.title), str(primary.hint)],
+		"[b]%s[/b] · %d/%d · %s" % [
+			str(project.title), int(project.progress), int(project.required), str(project.hint),
+		],
+	])
+	for contribution: Dictionary in project.contributions:
+		lines.append("  [color=#8fd0a2]✓ %s[/color] · %s" % [
+			str(contribution.label), str(contribution.contributor_name),
+		])
+	lines.append("\n[color=#efcd88][font_size=18]РЕПУТАЦИЯ И ГРУППЫ[/font_size][/color]")
+	lines.append("Репутация в районе: %d%%" % int(float(journal.reputation) * 100.0))
+	var affiliations: Array = journal.affiliations
+	lines.append("Группы: %s" % (
+		", ".join(PackedStringArray(affiliations)) if not affiliations.is_empty() else "пока нет"
+	))
+	lines.append("\n[color=#efcd88][font_size=18]ПОРУЧЕНИЯ[/font_size][/color]")
+	if journal.tasks.is_empty():
+		lines.append("Активных обещаний нет.")
+	else:
+		for task: Dictionary in journal.tasks:
+			lines.append("• %s → %s · %s · до тика %d" % [
+				str(task.requester_name), str(task.counterpart_name),
+				str(task.topic), int(task.deadline_tick),
+			])
+	lines.append("\n[color=#efcd88][font_size=18]ЗНАКОМЫЕ И ИХ ДЕЛА[/font_size][/color]")
+	for contact: Dictionary in journal.contacts:
+		lines.append("• [b]%s[/b] · %s · %s · %s" % [
+			str(contact.name), str(contact.role), str(contact.relationship), str(contact.activity),
+		])
+	_journal_text.text = "\n".join(lines)
+
+
+func _update_minimap() -> void:
+	if _minimap == null or player == null:
+		return
+	_minimap.set_state(
+		player.global_position, _player_place_id(),
+		str(_current_interior.get("name", ""))
+	)
 
 
 func _update_district_pulse() -> void:

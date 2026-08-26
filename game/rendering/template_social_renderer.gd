@@ -81,5 +81,12 @@ static func _effect_clause(effect: Dictionary) -> String:
 			return "Условия выполнены — приглашение твоё."
 		"ACCESS_GRANTED":
 			return "Условия выполнены — доступ %s оформлен." % str(effect.get("access_type", "ACCESS"))
+		"DISTRICT_CONTRIBUTION":
+			return "Я помогу: %s. Сейчас собрано %d из %d видов поддержки." % [
+				str(effect.get("contribution_label", "ресурс")),
+				int(effect.get("progress", 0)), int(effect.get("required", 2)),
+			]
+		"RELATIONSHIP_DAMAGED":
+			return "Этот запрос усилил напряжение между нами."
 		_:
 			return ""

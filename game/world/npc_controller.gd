@@ -7,18 +7,22 @@ var movement_zone := Rect2()
 var movement_paused := false
 var speed := 64.0
 var accent := Color("72c8d7")
+var role_hint := "resident"
 
 var _target := Vector2.ZERO
 var _wait_time := 0.0
 var _rng := RandomNumberGenerator.new()
 var _name_label: Label
+var _walk_phase := 0.0
+var _facing := Vector2.DOWN
 
 
-func setup(id: int, label_text: String, zone: Rect2, color: Color) -> void:
+func setup(id: int, label_text: String, zone: Rect2, color: Color, role: String = "resident") -> void:
 	person_id = id
 	known_name = label_text
 	movement_zone = zone
 	accent = color
+	role_hint = role.to_lower()
 	_rng.seed = 9109 + id * 7919
 	speed = 54.0 + float(id % 5) * 7.0
 
@@ -75,6 +79,10 @@ func _physics_process(delta: float) -> void:
 		return
 	velocity = velocity.move_toward(direction * speed, 320.0 * delta)
 	move_and_slide()
+	if velocity.length_squared() > 4.0:
+		_facing = velocity.normalized()
+		_walk_phase += delta * (6.0 + speed * 0.025)
+		queue_redraw()
 	if get_slide_collision_count() > 0:
 		_pick_target()
 
@@ -87,9 +95,31 @@ func _pick_target() -> void:
 
 
 func _draw() -> void:
-	draw_ellipse(Vector2(2, 9), 17.0, 9.0, Color(0, 0, 0, 0.28))
-	draw_circle(Vector2.ZERO, 15.5, accent.darkened(0.18))
-	draw_circle(Vector2(0, -4), 11.0, accent)
-	draw_arc(Vector2.ZERO, 15.5, 0, TAU, 24, accent.lightened(0.35), 1.5)
-	draw_circle(Vector2(-4, -6), 1.5, Color("17242a"))
-	draw_circle(Vector2(4, -6), 1.5, Color("17242a"))
+	var moving := velocity.length_squared() > 16.0
+	var stride: float = sin(_walk_phase) * 4.5 if moving else 0.0
+	var bob: float = abs(sin(_walk_phase)) * 1.4 if moving else 0.0
+	draw_ellipse(Vector2(2, 11), 17.0, 8.0, Color(0, 0, 0, 0.28))
+	draw_line(Vector2(-5, 7 - bob), Vector2(-6 + stride, 15), accent.darkened(0.42), 4.0)
+	draw_line(Vector2(5, 7 - bob), Vector2(6 - stride, 15), accent.darkened(0.42), 4.0)
+	draw_line(Vector2(-11, -1 - bob), Vector2(-13 - stride * 0.45, 6), accent.darkened(0.2), 3.0)
+	draw_line(Vector2(11, -1 - bob), Vector2(13 + stride * 0.45, 6), accent.darkened(0.2), 3.0)
+	draw_circle(Vector2(0, -bob), 15.5, accent.darkened(0.18))
+	draw_circle(Vector2(0, -5 - bob), 10.5, accent)
+	draw_arc(Vector2(0, -bob), 15.5, 0, TAU, 24, accent.lightened(0.35), 1.5)
+	var face_offset := _facing * 3.0
+	draw_circle(Vector2(-3, -6 - bob) + face_offset, 1.3, Color("17242a"))
+	draw_circle(Vector2(3, -6 - bob) + face_offset, 1.3, Color("17242a"))
+	_draw_role_marker(Vector2(0, -bob))
+
+
+func _draw_role_marker(origin: Vector2) -> void:
+	if "security" in role_hint or "doorman" in role_hint:
+		draw_rect(Rect2(origin + Vector2(-7, 1), Vector2(14, 8)), Color("263f58"))
+		draw_circle(origin + Vector2(0, 4), 2.0, Color("d5c777"))
+	elif "journalist" in role_hint or "photographer" in role_hint or "editor" in role_hint:
+		draw_rect(Rect2(origin + Vector2(8, -1), Vector2(7, 9)), Color("263039"))
+		draw_circle(origin + Vector2(11.5, 2), 2.0, Color("9ed3d7"))
+	elif "barista" in role_hint or "cafe" in role_hint or "catering" in role_hint:
+		draw_arc(origin + Vector2(0, 1), 11.0, 0.15, PI - 0.15, 12, Color("f0dfbf"), 3.0)
+	elif "engineer" in role_hint or "contractor" in role_hint:
+		draw_arc(origin + Vector2(0, -8), 8.0, PI, TAU, 12, Color("e7bd62"), 4.0)

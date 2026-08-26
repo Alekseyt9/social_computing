@@ -62,7 +62,7 @@ func advance(ticks_to_advance: int) -> void:
 
 func snapshot() -> Dictionary:
 	var employed := 0
-	var location_counts: Dictionary = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
+	var location_counts: Dictionary = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0}
 	var contact_edges := 0
 	var rumor_edges := 0
 	for agent_id: int in get_agent_ids():

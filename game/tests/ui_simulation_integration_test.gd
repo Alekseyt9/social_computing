@@ -16,11 +16,29 @@ func _run() -> void:
 	await process_frame
 	for required_path: String in [
 		"HUD/DistrictPulse", "HUD/NewsFeed", "HUD/ConsequenceToast",
-		"HUD/SaveLoadMenu", "AmbientCrowd", "PlaceInterior",
+		"HUD/SaveLoadMenu", "HUD/StartMenu", "HUD/SocialJournal",
+		"HUD/DistrictMinimapPanel/MinimapContent/DistrictMinimap", "AmbientCrowd", "PlaceInterior",
 	]:
 		if scene.get_node_or_null(required_path) == null:
 			_fail("Player-facing UI node is missing: %s" % required_path)
 			return
+	if not scene._start_menu_overlay.visible or scene.player.input_enabled:
+		_fail("Start menu does not pause the game before a new/load choice")
+		return
+	scene._start_new_game()
+	if scene._start_menu_overlay.visible or not scene.player.input_enabled:
+		_fail("New Game did not enter the playable world")
+		return
+	scene._toggle_journal()
+	if not scene._journal_overlay.visible or not scene._journal_text.text.contains("районную ярмарку"):
+		_fail("Social journal does not expose computed goals and consequences")
+		return
+	scene._toggle_journal()
+	scene._set_time_paused(true)
+	if scene.player.input_enabled:
+		_fail("Explicit time pause did not freeze player input")
+		return
+	scene._set_time_paused(false)
 	var crowd: Node = scene.get_node("AmbientCrowd")
 	if int(crowd.get_visible_count()) <= 0 or int(crowd.get_visible_count()) > 45:
 		_fail("Ambient adaptive crowd did not respect its visual budget")

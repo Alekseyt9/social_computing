@@ -57,6 +57,10 @@ func _draw() -> void:
 			_draw_shops()
 		6:
 			_draw_community_center()
+		7:
+			_draw_clinic()
+		8:
+			_draw_workshop()
 		_:
 			_draw_generic()
 	draw_rect(Rect2(630, 744, 140, 35), Color("131c20"))
@@ -89,6 +93,27 @@ func _draw_community_center() -> void:
 		draw_rect(Rect2(point - Vector2(78, 28), Vector2(156, 56)), accent.darkened(0.38))
 	draw_circle(Vector2(700, 535), 125, Color("384a4e"))
 	draw_circle(Vector2(700, 535), 105, accent.darkened(0.42), false, 5.0)
+
+
+func _draw_clinic() -> void:
+	for room: Rect2 in [Rect2(105, 145, 330, 210), Rect2(485, 145, 330, 210), Rect2(865, 145, 330, 210)]:
+		draw_rect(room, Color("d5e1df"))
+		draw_rect(room.grow(-12), Color("71909a"), false, 4.0)
+	for seat_x in range(180, 1230, 145):
+		draw_rect(Rect2(seat_x, 520, 80, 36), Color("45636d"))
+	draw_rect(Rect2(610, 390, 180, 70), Color("eef4ee"))
+	draw_rect(Rect2(684, 405, 32, 40), Color("cf6565"))
+	draw_rect(Rect2(670, 419, 60, 12), Color("cf6565"))
+
+
+func _draw_workshop() -> void:
+	for table: Rect2 in [Rect2(120, 170, 300, 100), Rect2(550, 170, 300, 100), Rect2(980, 170, 300, 100), Rect2(240, 470, 360, 110), Rect2(800, 470, 360, 110)]:
+		draw_rect(Rect2(table.position + Vector2(6, 8), table.size), Color(0, 0, 0, 0.25))
+		draw_rect(table, Color("72523a"))
+		draw_rect(table.grow(-12), accent.darkened(0.38), false, 4.0)
+	for point in [Vector2(180, 215), Vector2(610, 215), Vector2(1040, 215), Vector2(310, 520), Vector2(870, 520)]:
+		draw_circle(point, 13, Color("d2b56c"), false, 4.0)
+		draw_line(point - Vector2(9, 9), point + Vector2(9, 9), Color("d2b56c"), 3.0)
 
 
 func _draw_generic() -> void:

@@ -14,6 +14,7 @@ func _run() -> void:
 	root.add_child(scene)
 	await process_frame
 	await process_frame
+	scene._start_new_game()
 	var players := get_nodes_in_group("player")
 	var npcs := get_nodes_in_group("npc")
 	if players.size() != 1:

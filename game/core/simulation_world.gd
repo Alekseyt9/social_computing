@@ -67,6 +67,9 @@ var _lazy_history: RefCounted
 var _activated_adaptive_person_ids: Dictionary = {}
 var _command_log: Array[Dictionary] = []
 var _is_replaying: bool = false
+var _district_project_contributions: Dictionary = {}
+var _reputation_by_person: Dictionary = {}
+var _affiliations_by_person: Dictionary = {}
 
 const RESIDENT_FIRST_NAMES := [
 	"Алексей", "Анна", "Борис", "Вера", "Глеб", "Дарья", "Егор", "Жанна",
@@ -139,6 +142,8 @@ func snapshot() -> Dictionary:
 		"refined_light_agent_count": int(adaptive_snapshot.get("light_agent_count", 0)),
 		"adaptive_persistent_count": int(adaptive_snapshot.get("promoted_persistent_count", 0)),
 		"district_field_update_count": int(field_snapshot.get("update_count", 0)),
+		"district_project_contribution_count": _district_project_contributions.size(),
+		"player_reputation": float(_reputation_by_person.get(player_id, 0.0)),
 	}
 
 
@@ -217,6 +222,63 @@ func get_active_tasks_for(actor_id: int) -> Array[Dictionary]:
 		view["counterpart_name"] = get_person_name(int(task.counterpart_id))
 		visible.append(view)
 	return visible
+
+
+func get_district_project_state(observer_id: int) -> Dictionary:
+	var contributions: Array[Dictionary] = []
+	for contribution_type: String in _district_project_contributions:
+		var contribution: Dictionary = _district_project_contributions[contribution_type]
+		contributions.append({
+			"type": contribution_type,
+			"label": _district_contribution_label(contribution_type),
+			"contributor_id": int(contribution.contributor_id),
+			"contributor_name": get_person_name(int(contribution.contributor_id)),
+			"tick": int(contribution.tick),
+		})
+	contributions.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a.type) < str(b.type)
+	)
+	var completed := contributions.size() >= 2
+	return {
+		"stage": "COMPLETED" if completed else "BUILD_COALITION",
+		"title": "Районная ярмарка готова" if completed else "Собрать районную ярмарку",
+		"hint": (
+			"Жители собрали достаточно разных ресурсов для общего события."
+			if completed else
+			"Заручитесь двумя разными видами поддержки. Возможны разные сочетания людей и ресурсов."
+		),
+		"required": 2,
+		"progress": contributions.size(),
+		"contributions": contributions,
+		"observer_id": observer_id,
+	}
+
+
+func get_player_journal_view(observer_id: int) -> Dictionary:
+	var contacts: Array[Dictionary] = []
+	for card: Dictionary in get_contact_cards_for(observer_id):
+		var person_id := int(card.id)
+		var relationship := get_relationship_state(observer_id, person_id)
+		var activity := get_person_activity_view(person_id)
+		contacts.append({
+			"id": person_id,
+			"name": str(card.name),
+			"role": str(card.role),
+			"relationship": _relationship_category(relationship),
+			"activity": str(activity.get("activity_label", "распорядок пока неизвестен")),
+		})
+	contacts.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a.name) < str(b.name)
+	)
+	return {
+		"primary_goal": get_goal_state(observer_id),
+		"district_project": get_district_project_state(observer_id),
+		"tasks": get_active_tasks_for(observer_id),
+		"contacts": contacts,
+		"news": get_player_news_feed(observer_id, 8),
+		"reputation": float(_reputation_by_person.get(observer_id, 0.0)),
+		"affiliations": Array(_affiliations_by_person.get(observer_id, {}).keys()),
+	}
 
 
 func get_goal_reachability_report() -> Dictionary:
@@ -724,6 +786,14 @@ func _player_news_item(observer_id: int, event: RefCounted) -> Dictionary:
 				event.timestamp, "PLACE", "Новое место",
 				"Вы пришли: %s." % str(_places[event.location_id].display_name)
 			)
+		"district_project_contribution":
+			if not involves_observer:
+				return {}
+			var contributor_id := int(event.target_ids[0]) if not event.target_ids.is_empty() else -1
+			return _news_item(
+				event.timestamp, "PROJECT", "Поддержка районной ярмарки",
+				"%s присоединился к общей инициативе." % get_person_name(contributor_id)
+			)
 		_:
 			return {}
 
@@ -996,6 +1066,17 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 				"access_type": str(issuer_fact.object_value),
 			},
 		})
+
+	var contribution_type := _district_support_type_for(target_id)
+	if not contribution_type.is_empty() and not _district_project_contributions.has(contribution_type):
+		actions.append({
+			"type": "AskDistrictSupport",
+			"context": {
+				"topic": "районную ярмарку",
+				"contribution_type": contribution_type,
+				"contribution_label": _district_contribution_label(contribution_type),
+			},
+		})
 	return actions
 
 
@@ -1109,7 +1190,7 @@ func perform_social_action(
 		return introduce_people(actor_id, target_id)
 	if action_type not in [
 		"BuildRapport", "OfferHelp", "JoinActivity", "AskAbout", "AskLocalNews", "AskFavor",
-		"AskIntroduction", "AskInvitation", "RequestAccess"
+		"AskIntroduction", "AskInvitation", "RequestAccess", "AskDistrictSupport"
 	] and action_type not in TASK_OPERATORS:
 		return {"ok": false, "error": "UNKNOWN_ACTION"}
 	if not _people.has(actor_id) or not _people.has(target_id):
@@ -1152,6 +1233,14 @@ func perform_social_action(
 		var access_issuer_fact: RefCounted = _facts[access_issuer_fact_id]
 		if str(context.get("access_type", "")) != str(access_issuer_fact.object_value):
 			return {"ok": false, "error": "ACCESS_TYPE_MISMATCH"}
+	if action_type == "AskDistrictSupport":
+		var expected_contribution := _district_support_type_for(target_id)
+		if expected_contribution.is_empty():
+			return {"ok": false, "error": "TARGET_HAS_NO_PROJECT_RESOURCE"}
+		if str(context.get("contribution_type", "")) != expected_contribution:
+			return {"ok": false, "error": "PROJECT_RESOURCE_MISMATCH"}
+		if _district_project_contributions.has(expected_contribution):
+			return {"ok": false, "error": "PROJECT_RESOURCE_ALREADY_SECURED"}
 	if action_type in TASK_OPERATORS:
 		var task_id := int(context.get("task_id", -1))
 		var task: Dictionary = _tasks.get(task_id, {})
@@ -1299,6 +1388,13 @@ func _apply_social_effects(
 	var previous_count := int(_action_counts.get(count_key, 0))
 	_action_counts[count_key] = previous_count + 1
 	if decision.decision != "ACCEPT":
+		if decision.decision == "REFUSE" and _relationships.has(
+			_relationship_key(target_id, actor_id)
+		):
+			var refused_target: RefCounted = _relationships[_relationship_key(target_id, actor_id)]
+			refused_target.resentment = clampf(refused_target.resentment + 0.025, 0.0, 1.0)
+			refused_target.trust = clampf(refused_target.trust - 0.015, 0.0, 1.0)
+			effects.append({"type": "RELATIONSHIP_DAMAGED", "resentment_delta": 0.025})
 		return
 
 	var target_to_actor: RefCounted = _relationships[_relationship_key(target_id, actor_id)]
@@ -1356,6 +1452,7 @@ func _apply_social_effects(
 				[] as Array[int]
 			))
 			_next_event_id += 1
+			_increase_reputation(actor_id, 0.018)
 	elif action_type == "AskIntroduction":
 		var subject_id := int(context.subject_person_id)
 		if not has_relationship(actor_id, subject_id):
@@ -1372,8 +1469,33 @@ func _apply_social_effects(
 			actor_id, target_id, str(context.get("access_type", "")),
 			effects, affected_fact_ids
 		)
+	elif action_type == "AskDistrictSupport":
+		var contribution_type := str(context.get("contribution_type", ""))
+		if not contribution_type.is_empty() and not _district_project_contributions.has(contribution_type):
+			_district_project_contributions[contribution_type] = {
+				"contributor_id": target_id,
+				"tick": tick,
+			}
+			_increase_reputation(actor_id, 0.08)
+			_add_affiliation(actor_id, "Организаторы района")
+			effects.append({
+				"type": "DISTRICT_CONTRIBUTION",
+				"contribution_type": contribution_type,
+				"contribution_label": _district_contribution_label(contribution_type),
+				"progress": _district_project_contributions.size(),
+				"required": 2,
+			})
+			_events.append(SocialEventScript.new(
+				_next_event_id, "district_project_contribution",
+				[actor_id] as Array[int], [target_id] as Array[int],
+				6, tick, 0.72, 0.42, 0.05, [] as Array[int]
+			))
+			_next_event_id += 1
 	elif action_type in TASK_OPERATORS:
 		_complete_task(int(context.get("task_id", -1)), effects, affected_fact_ids)
+
+	if target_to_actor.trust >= 0.72 and target_to_actor.familiarity >= 0.62:
+		_add_affiliation(actor_id, "Близкие знакомые")
 
 
 func _grant_access_token(
@@ -1566,6 +1688,8 @@ func _activity_need_type(activity: String) -> String:
 		"LEISURE": "SUPPORT",
 		"SOCIAL": "SUPPORT",
 		"COMMUNITY": "REPUTATION",
+		"HEALTH": "SECURITY",
+		"CRAFT": "RESOURCES",
 		"HOME": "SECURITY",
 	}.get(activity, "SUPPORT")
 
@@ -1706,9 +1830,13 @@ func _build_aurora_scenario() -> void:
 	_add_place(4, "District Park", "park")
 	_add_place(5, "Shopping Quarter", "retail")
 	_add_place(6, "Community Center", "community")
+	_add_place(7, "District Clinic", "clinic")
+	_add_place(8, "Workshop Yard", "workshop")
 	_add_organization(1, "Aurora", "company")
 	_add_organization(2, "Corner Cafe", "business")
 	_add_person(1, "Player", "independent", 3, 0, true)
+	_reputation_by_person[player_id] = 0.10
+	_affiliations_by_person[player_id] = {}
 
 	var npc_definitions: Array[Array] = [
 		[2, "Anna", "designer", 3, 0],
@@ -2021,6 +2149,57 @@ func _relationship_key(source_person_id: int, target_person_id: int) -> String:
 	return "%d:%d" % [source_person_id, target_person_id]
 
 
+func _district_support_type_for(person_id: int) -> String:
+	var person: RefCounted = _people.get(person_id)
+	if person == null or person_id == player_id:
+		return ""
+	var role := str(person.role).to_lower()
+	if "journalist" in role or "editor" in role or "photographer" in role or "pr" in role:
+		return "PUBLICITY"
+	if "barista" in role or "cafe" in role or "catering" in role or "courier" in role or "contractor" in role:
+		return "SUPPLIES"
+	if "lawyer" in role or "security" in role or "organizer" in role or "hr" in role:
+		return "VENUE_APPROVAL"
+	var activity := get_person_activity_view(person_id)
+	if str(activity.get("activity", "")) == "COMMUNITY":
+		return "VOLUNTEERS"
+	var selector := posmod(person_id + int(float(person.personality.get("sociability", 0.5)) * 10.0), 4)
+	return ["VOLUNTEERS", "PUBLICITY", "SUPPLIES", "VENUE_APPROVAL"][selector]
+
+
+func _district_contribution_label(contribution_type: String) -> String:
+	return {
+		"VOLUNTEERS": "команда волонтёров",
+		"PUBLICITY": "информационная поддержка",
+		"SUPPLIES": "материалы и снабжение",
+		"VENUE_APPROVAL": "согласование площадки",
+	}.get(contribution_type, "поддержка района")
+
+
+func _increase_reputation(person_id: int, amount: float) -> void:
+	_reputation_by_person[person_id] = clampf(
+		float(_reputation_by_person.get(person_id, 0.0)) + amount, 0.0, 1.0
+	)
+
+
+func _add_affiliation(person_id: int, affiliation: String) -> void:
+	var affiliations: Dictionary = _affiliations_by_person.get(person_id, {})
+	affiliations[affiliation] = true
+	_affiliations_by_person[person_id] = affiliations
+
+
+func _relationship_category(relationship: Dictionary) -> String:
+	if relationship.is_empty():
+		return "незнакомы"
+	if float(relationship.get("resentment", 0.0)) >= 0.55:
+		return "конфликт"
+	if float(relationship.get("trust", 0.0)) >= 0.72 and float(relationship.get("familiarity", 0.0)) >= 0.62:
+		return "дружба"
+	if float(relationship.get("trust", 0.0)) >= 0.42:
+		return "доверие"
+	return "знакомство"
+
+
 func _conversation_key(first_person_id: int, second_person_id: int) -> String:
 	return "%d:%d" % [mini(first_person_id, second_person_id), maxi(first_person_id, second_person_id)]
 
@@ -2189,6 +2368,8 @@ func export_save_data() -> Dictionary:
 			"fact_count": int(state.fact_count),
 			"knowledge_edge_count": int(state.knowledge_edge_count),
 			"adaptive_transition_count": int(adaptive.transition_count),
+			"district_project_contribution_count": int(state.district_project_contribution_count),
+			"player_reputation": float(state.player_reputation),
 		},
 	}
 
@@ -2225,6 +2406,12 @@ static func create_from_save_data(data: Dictionary) -> RefCounted:
 		actual.knowledge_edge_count
 	) or int(expected.get("adaptive_transition_count", -1)) != int(
 		adaptive.transition_count
+	) or (
+		expected.has("district_project_contribution_count")
+		and int(expected.district_project_contribution_count) != int(actual.district_project_contribution_count)
+	) or (
+		expected.has("player_reputation")
+		and not is_equal_approx(float(expected.player_reputation), float(actual.player_reputation))
 	):
 		return null
 	return restored

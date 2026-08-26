@@ -9,6 +9,8 @@ const PLACE_ZONES := {
 	4: Rect2(85, 480, 425, 225),
 	5: Rect2(1165, 1015, 430, 170),
 	6: Rect2(1815, 430, 500, 315),
+	7: Rect2(1840, 1015, 420, 150),
+	8: Rect2(1210, 1175, 400, 200),
 }
 
 var _world: RefCounted
@@ -16,6 +18,7 @@ var _citizens: Dictionary = {}
 var _motion_clock: float = 0.0
 var _interior_place_id: int = -1
 var _interior_zone := Rect2()
+var motion_paused := false
 
 
 func setup(world: RefCounted) -> void:
@@ -168,6 +171,8 @@ func get_spawn_point(agent_id: int, place_id: int) -> Vector2:
 
 
 func _process(delta: float) -> void:
+	if motion_paused:
+		return
 	_motion_clock += delta
 	var completed_retirements: Array[int] = []
 	for agent_id: int in _citizens:
@@ -286,6 +291,10 @@ func _hubs_to_center(place_id: int) -> Array[Vector2]:
 			return [Vector2(1370, 1100), Vector2(1725, 1100), Vector2(1725, 560), Vector2(875, 560)] as Array[Vector2]
 		6:
 			return [Vector2(1815, 560), Vector2(1725, 560), Vector2(875, 560)] as Array[Vector2]
+		7:
+			return [Vector2(1815, 1100), Vector2(1725, 1100), Vector2(875, 1100), Vector2(875, 560)] as Array[Vector2]
+		8:
+			return [Vector2(1410, 1100), Vector2(875, 1100), Vector2(875, 560)] as Array[Vector2]
 		_:
 			return [Vector2(875, 560)] as Array[Vector2]
 
@@ -298,6 +307,8 @@ func _place_gate(place_id: int) -> Vector2:
 		4: return Vector2(515, 560)
 		5: return Vector2(1370, 1015)
 		6: return Vector2(1815, 590)
+		7: return Vector2(2060, 1015)
+		8: return Vector2(1410, 1175)
 		_: return Vector2(875, 560)
 
 

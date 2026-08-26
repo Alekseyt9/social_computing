@@ -82,18 +82,26 @@ Implemented so far:
   district news feed, and consequence notifications for computed action effects;
 - a three-slot save/load menu that restores the deterministic world, adaptive
   population, relationships, histories, player position, and current interior;
+- a title screen with New Game, Continue, slot loading, autosave, pause and
+  1×/4×/12× simulation speed controls;
+- a player-facing Social Journal for goals, promises, known NPC routines,
+  friendships/conflicts, affiliations, and district reputation;
+- a second systemic goal: organize a district fair using any two distinct
+  resources computed from NPC roles, activities, decisions, and relationships;
+- five playable interiors, a HUD minimap, animated procedural characters, and
+  additional street landmarks and props;
 - up to 45 moving ambient residents rendered from the current adaptive
   LightAgent working set, without creating physics-heavy NPC nodes for all 1,200;
 - a walking-skeleton interface and headless acceptance tests.
 
-Milestone 1 is implemented. Milestone 2 has started with a deterministic layer
-of 1,200 lightweight residents alongside the 20 persistent story NPCs. The
+Milestones 1–5 are implemented. The deterministic population layer contains
+1,200 lightweight residents alongside the 20 persistent story NPCs. The
 lightweight layer currently includes households, two workplaces, daily
 schedules, sparse local contacts, money transfers, social groups, job changes,
 and bounded gossip propagation. Population signals are imported into the
 persistent EventStore as observer-safe district opportunities: informed NPCs
 can disclose them through the model-driven `AskLocalNews` action. Aggregate/
-refinement LOD is now the active Milestone 3 workstream.
+refinement LOD is active in both headless simulation and the playable district.
 
 The MS3 implementation adds reversible `Aggregate ↔ LightAgent ↔ PersistentNPC`
 tier membership over the same canonical residents. It starts with 1,140
@@ -140,10 +148,10 @@ For a double-click launch, open the `game` folder and run `START_GAME.cmd`. It
 automatically loads the local `.env` through the main launch script.
 
 Controls: `WASD` or the arrow keys to walk, `E` to interact, `T` to advance one
-simulated hour, `M` to open the known-social-graph map, and `F3` to open the
-developer inspector. Press `Esc` to close the active panel or open the save/load
-menu. `F5` quick-saves to slot 1 and `F9` quick-loads slot 1. The camera follows
-the player; buildings and the edge of the district block movement.
+simulated hour, `J` to open the Social Journal, `M` to open the known-social-
+graph map, and `F3` to open the developer inspector. `Space` pauses time;
+`1`/`2`/`3` select 1×/4×/12× speed. Press `Esc` to close the active panel or
+open the pause/save menu. `F5` quick-saves to slot 1 and `F9` quick-loads slot 1.
 
 ### Saving and loading
 
@@ -154,6 +162,10 @@ knowledge, social fields, generated history, the player's position, moving story
 NPC positions, and the current building interior. The save is versioned and
 verified against deterministic checksums when loaded; an invalid or damaged file
 is rejected instead of partially applying it.
+
+An additional `autosave.json` is written after entering/leaving an interior,
+resolving an important social action, or completing the Aurora entrance. The
+title-screen Continue button selects the newest autosave or manual slot.
 
 Save files are readable JSON at:
 
@@ -166,6 +178,27 @@ round-trip regression with:
 
 ```powershell
 godot_console --headless --path ./game --script res://tests/save_load_roundtrip_test.gd
+```
+
+### Second systemic scenario and visual district pass
+
+The district-fair goal runs alongside Aurora. Known NPCs expose a request for a
+resource derived from their current role and activity: volunteers, publicity,
+supplies, or venue approval. The goal accepts any two distinct resource types;
+acceptance is resolved by `DecisionEngine`, not character-specific dialogue.
+Repeated accepted interactions raise district reputation and can add social
+affiliations; a hard refusal lowers trust and increases resentment.
+
+The Social Journal (`J`) shows both goals, contributions, promises, contacts,
+current known routines, relationship category, reputation and groups. The map
+now includes playable clinic and workshop interiors, short scheduled visits to
+both places, a minimap, procedural walk animation, role markers, transit stops,
+bicycles, parked vehicles and planters.
+
+Run the systemic expansion regression with:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/systemic_gameplay_expansion_test.gd
 ```
 
 The simplest way to start the game from PowerShell at the repository root is:
@@ -376,6 +409,31 @@ Run the two-week deterministic reconstruction test:
 ```powershell
 godot_console --headless --path ./game --script res://tests/milestone5_lazy_history_test.gd
 ```
+
+### GPU population operators (MS6 started)
+
+The first MS6 operator is implemented as a Godot compute shader. It updates a
+packed buffer of wealth, stress, spending and activity values in 64-agent work
+groups. The same operator has a CPU implementation and automatically falls back
+when a local RenderingDevice is unavailable. Persistent-NPC reasoning and the
+canonical simulation remain CPU-authoritative while GPU parity is being proven.
+
+The normal headless test verifies the fallback path:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone6_compute_parity_test.gd
+```
+
+Run the actual Vulkan compute path with Godot's Mobile renderer:
+
+```powershell
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_compute_parity_test.gd
+```
+
+On the current development machine, 4,096 agents complete with a maximum CPU/GPU
+value difference below `0.000001`. The next MS6 step is to feed packed canonical
+LightAgent cohort buffers through this backend and benchmark transfer overhead
+before enabling it in the live world.
 
 ## Groq API
 

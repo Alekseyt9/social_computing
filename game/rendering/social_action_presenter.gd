@@ -30,6 +30,8 @@ static func button_label(action: Dictionary) -> String:
 				"MEDIA_PASS": "Запросить аккредитацию прессы",
 				"CONTRACTOR_BADGE": "Запросить пропуск подрядчика",
 			}.get(str(context.get("access_type", "")), "Запросить доступ")
+		"AskDistrictSupport":
+			return "Попросить: %s" % str(context.get("contribution_label", "поддержка района"))
 		"GatherInformation":
 			return "Узнать сведения для %s" % str(context.get("requester_name", "знакомого"))
 		"DeliverMessage":
@@ -66,6 +68,11 @@ static func player_line(action_type: String, context: Dictionary) -> String:
 			return _join(["Можно", "получить", "приглашение", "на", topic], "?")
 		"RequestAccess":
 			return _join(["Можно", "оформить", str(context.get("access_type", "доступ")), "на", topic], "?")
+		"AskDistrictSupport":
+			return _join([
+				"Ты", "можешь", "поддержать", topic,
+				"и", "предоставить", str(context.get("contribution_label", "нужный ресурс")),
+			], "?")
 		"GatherInformation":
 			return _join(["Мне", "нужно", "уточнить", topic, "для", str(context.get("requester_name", "знакомого"))], ".")
 		"DeliverMessage":
@@ -97,5 +104,7 @@ static func _activity_button(activity: String) -> String:
 		"JOB_SEARCH": "Вместе посмотреть вакансии",
 		"SOCIAL": "Посидеть вместе",
 		"COMMUNITY": "Присоединиться к общему делу",
+		"HEALTH": "Поддержать во время визита",
+		"CRAFT": "Помочь с проектом в мастерской",
 		"HOME": "Поговорить о домашних делах",
 	}.get(activity, "Присоединиться к занятию")

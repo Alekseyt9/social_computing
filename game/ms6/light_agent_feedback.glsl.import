@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://fvpf0rnrgjar"
+path="res://.godot/imported/light_agent_feedback.glsl-80df871e4065271d82fd683bb0a65c33.res"
+
+[deps]
+
+source_file="res://ms6/light_agent_feedback.glsl"
+dest_files=["res://.godot/imported/light_agent_feedback.glsl-80df871e4065271d82fd683bb0a65c33.res"]
+
+[params]
+
