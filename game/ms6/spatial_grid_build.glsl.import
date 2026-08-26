@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://0tw4shuxiv1u"
+path="res://.godot/imported/spatial_grid_build.glsl-e8089376622fe4c2e5b75de09ae55942.res"
+
+[deps]
+
+source_file="res://ms6/spatial_grid_build.glsl"
+dest_files=["res://.godot/imported/spatial_grid_build.glsl-e8089376622fe4c2e5b75de09ae55942.res"]
+
+[params]
+

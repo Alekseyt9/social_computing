@@ -145,7 +145,10 @@ Full technical specification: [adaptive_social_immersive_sim_codex_spec.md](adap
 Requires Godot 4.7+.
 
 For a double-click launch, open the `game` folder and run `START_GAME.cmd`. It
-automatically loads the local `.env` through the main launch script.
+automatically loads the local `.env` through the main launch script. On a
+Vulkan-capable GPU, `START_GAME_GPU.cmd` starts the Mobile renderer and enables
+the MS6 GPU shadow-validation path; the normal launcher remains the broadest-
+compatibility option.
 
 Controls: `WASD` or the arrow keys to walk, `E` to interact, `T` to advance one
 simulated hour, `J` to open the Social Journal, `M` to open the known-social-
@@ -410,13 +413,44 @@ Run the two-week deterministic reconstruction test:
 godot_console --headless --path ./game --script res://tests/milestone5_lazy_history_test.gd
 ```
 
-### GPU population operators (MS6 started)
+### GPU population operators and spatial neighborhoods (MS6.3)
 
-The first MS6 operator is implemented as a Godot compute shader. It updates a
-packed buffer of wealth, stress, spending and activity values in 64-agent work
-groups. The same operator has a CPU implementation and automatically falls back
-when a local RenderingDevice is unavailable. Persistent-NPC reasoning and the
-canonical simulation remain CPU-authoritative while GPU parity is being proven.
+The first MS6 operator is connected to the live `PackedLightAgentStore`. Every
+resident now carries wealth, stress, spending and activity in four additional
+packed scalar columns (11 scalar columns total, still zero per-agent Dictionary
+records). Once per simulated day the operator updates those live fields in
+64-agent work groups. Their aggregates feed cohort employment transitions and
+individual spending affects conserved money-transfer sizes.
+
+The GPU currently runs in shadow mode and the deterministic CPU buffer remains
+canonical. Its `RenderingDevice`, two compute pipelines, parameter buffer and
+power-of-two state buffers now persist for the lifetime of the population
+simulation. Feedback mutations are tracked in 64-agent dirty blocks, so only
+changed ranges are uploaded between daily dispatches.
+
+A second compute pass performs deterministic workgroup reductions for wealth,
+stress, spending and activity. Normal shadow days read back only these compact
+partial sums; the first day and every seventh day perform a complete CPU/GPU
+buffer comparison. A parity or summary failure permanently disables GPU attempts
+for that world; an unavailable RenderingDevice selects CPU fallback. Backend,
+resource reuse, transfer volume, timing, error and field summaries are visible
+in the `F3` metrics payload.
+
+Physical proximity now uses a `25×16` spatial grid over the district instead of
+an all-pairs scan. Stable schedule-derived positions place every lightweight
+resident inside their current home, workplace or activity zone. Each grid cell
+keeps eight deterministic representative lanes; neighborhood queries examine
+only the surrounding nine cells and select by distance with agent ID as the tie
+breaker. This keeps CPU fallback and GPU output identical while bounding dense-
+area work to a fixed number of candidates.
+
+The GPU builds the grid with deterministic `atomicMin` representatives and runs
+the neighborhood query in a second dispatch after a compute barrier. The CPU
+result remains canonical and is compared against the complete GPU neighbor
+buffer. Every 72 simulation ticks, the resulting physical neighbor can become a
+real gossip source; existing social contacts remain the fallback. Spatial
+backend status, parity, neighbor coverage, transfer counts and resource reuse
+are included under `ms6.spatial` in the `F3` metrics payload.
 
 The normal headless test verifies the fallback path:
 
@@ -430,10 +464,64 @@ Run the actual Vulkan compute path with Godot's Mobile renderer:
 godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_compute_parity_test.gd
 ```
 
-On the current development machine, 4,096 agents complete with a maximum CPU/GPU
-value difference below `0.000001`. The next MS6 step is to feed packed canonical
-LightAgent cohort buffers through this backend and benchmark transfer overhead
-before enabling it in the live world.
+Exercise the same compute path through 4,096 real packed LightAgents:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone6_live_store_test.gd
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_live_store_test.gd
+```
+
+Verify persistent resources, single-agent partial upload and summary-only
+readback:
+
+```powershell
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_persistent_backend_test.gd
+```
+
+Run the transfer regression at 1,200, 10,000 and 100,000 agents:
+
+```powershell
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_scale_transfer_test.gd
+```
+
+Run 30 live simulation days with money transfers, employment changes, dirty
+uploads and an equal-seed CPU reference:
+
+```powershell
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_long_horizon_test.gd
+```
+
+Verify direct CPU/GPU spatial parity and persistent resources:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone6_spatial_grid_test.gd
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_spatial_grid_test.gd
+```
+
+Exercise physical gossip for seven live days and compare against an equal-seed
+CPU simulation:
+
+```powershell
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_spatial_integration_test.gd
+```
+
+Run the spatial grid at 1,200, 10,000 and 100,000 agents:
+
+```powershell
+godot_console --path ./game --rendering-method mobile --script res://tests/milestone6_spatial_scale_test.gd
+```
+
+On the current development machine, eight live 4,096-agent updates reuse one
+device and one buffer allocation, perform only two full readbacks, and stay
+within about `0.00000006` of the CPU reference. The scale regression completes
+15 dispatches across all three population sizes in about half a second and
+downloads roughly 42% of the data required by full readback after every
+dispatch. The spatial scale test finds bounded physical neighbors for 100,000
+agents in roughly `0.3` seconds; the seven-day live test performs 28 verified
+spatial dispatches and routes more than 5,000 gossip attempts through physical
+proximity without changing the equal-seed canonical result. The next MS6 step
+is moving social-field and aggregate cohort reductions onto compute shaders;
+authoritative integer money and population counts remain CPU-side.
 
 ## Groq API
 

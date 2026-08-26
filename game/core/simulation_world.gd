@@ -289,6 +289,10 @@ func get_light_population_snapshot() -> Dictionary:
 	return _light_population.snapshot()
 
 
+func get_ms6_metrics() -> Dictionary:
+	return _light_population.get_ms6_metrics()
+
+
 func get_light_agent_view(agent_id: int) -> Dictionary:
 	return _light_population.get_agent_view(agent_id)
 
@@ -674,6 +678,7 @@ func get_metrics() -> Dictionary:
 		"light_population": light_metrics,
 		"adaptive_population": adaptive_metrics,
 		"district_social_fields": field_metrics,
+		"ms6": get_ms6_metrics(),
 	}
 
 
@@ -2370,6 +2375,9 @@ func export_save_data() -> Dictionary:
 			"adaptive_transition_count": int(adaptive.transition_count),
 			"district_project_contribution_count": int(state.district_project_contribution_count),
 			"player_reputation": float(state.player_reputation),
+			"light_feedback_checksum": str(
+				get_light_population_snapshot().feedback.checksum
+			),
 		},
 	}
 
@@ -2412,6 +2420,11 @@ static func create_from_save_data(data: Dictionary) -> RefCounted:
 	) or (
 		expected.has("player_reputation")
 		and not is_equal_approx(float(expected.player_reputation), float(actual.player_reputation))
+	) or (
+		expected.has("light_feedback_checksum")
+		and str(expected.light_feedback_checksum) != str(
+			restored.get_light_population_snapshot().feedback.checksum
+		)
 	):
 		return null
 	return restored

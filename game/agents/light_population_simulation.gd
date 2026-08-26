@@ -5,12 +5,19 @@ const HouseholdScript := preload("res://core/model/household.gd")
 const SocialGroupScript := preload("res://core/model/social_group.gd")
 const LightScheduleScript := preload("res://agents/light_schedule.gd")
 const PackedAgentStoreScript := preload("res://adaptive/packed_light_agent_store.gd")
+const GpuPopulationBackendScript := preload("res://ms6/gpu_population_backend.gd")
+const SpatialNeighborhoodBackendScript := preload("res://ms6/spatial_neighborhood_backend.gd")
 
 const FIRST_AGENT_ID := 10_000
 const DEFAULT_POPULATION := 1_200
 const GOSSIP_INTERVAL := 12
 const MONEY_INTERVAL := 24
 const CONTACT_TARGET := 6
+const MS6_GPU_AGENT_THRESHOLD := 1024
+const MS6_PARITY_TOLERANCE := 0.00001
+const MS6_FULL_PARITY_INTERVAL := 7
+const MS6_SPATIAL_INTERVAL := 72
+const MS6_SPATIAL_RADIUS := 72.0
 const RUMOR_TOPICS := [
 	"вакансии в Aurora", "изменения смен в кафе", "закрытое мероприятие Aurora",
 	"новый подряд на обслуживание", "рост цен в районе", "встреча журналистов",
@@ -36,11 +43,30 @@ var _detailed_agent_steps: int = 0
 var _aggregate_agent_steps: int = 0
 var _detailed_agent_ids: Dictionary = {}
 var _social_field_influence: Dictionary = {}
+var _gpu_backend: RefCounted
+var _spatial_backend: RefCounted
+var _ms6_update_count := 0
+var _ms6_backend_status := "NOT_RUN"
+var _ms6_max_error := 0.0
+var _ms6_summary_max_error := 0.0
+var _ms6_last_elapsed_usec := 0
+var _ms6_gpu_disabled := false
+var _ms6_gpu_unavailable := false
+var _ms6_prefer_gpu := true
+var _spatial_neighbors := PackedInt32Array()
+var _ms6_spatial_update_count := 0
+var _ms6_spatial_status := "NOT_RUN"
+var _ms6_spatial_mismatch_count := 0
+var _ms6_spatial_gpu_disabled := false
+var _ms6_spatial_gpu_unavailable := false
+var _spatial_gossip_source_count := 0
 
 
 func _init(initial_seed: int, population_size: int = DEFAULT_POPULATION) -> void:
 	_random_state = (initial_seed ^ 0x51f15e) & _LCG_MASK
 	_store = PackedAgentStoreScript.new(FIRST_AGENT_ID, maxi(1, population_size))
+	_gpu_backend = GpuPopulationBackendScript.new()
+	_spatial_backend = SpatialNeighborhoodBackendScript.new()
 	_build_groups()
 	_build_population(maxi(1, population_size))
 	_build_local_contacts()
@@ -52,11 +78,14 @@ func advance(ticks_to_advance: int) -> void:
 	for _index in range(maxi(0, ticks_to_advance)):
 		tick += 1
 		if tick % GOSSIP_INTERVAL == 0:
+			if tick % MS6_SPATIAL_INTERVAL == 0:
+				run_ms6_spatial_batch(_ms6_prefer_gpu)
 			_propagate_gossip()
 			_update_locations()
 		if tick % MONEY_INTERVAL == 0:
 			_transfer_money_between_contacts()
 		if tick % LightScheduleScript.DAY_TICKS == 0:
+			run_ms6_feedback_batch(_ms6_prefer_gpu)
 			_update_employment()
 
 
@@ -85,6 +114,7 @@ func snapshot() -> Dictionary:
 		"local_contact_edges": contact_edges,
 		"rumor_knowledge_edges": rumor_edges,
 		"gossip_transfers": _gossip_transfer_count,
+		"spatial_gossip_sources": _spatial_gossip_source_count,
 		"job_changes": _job_change_count,
 		"money_transfers": _money_transfer_count,
 		"contextual_activities": _contextual_activity_count,
@@ -93,12 +123,209 @@ func snapshot() -> Dictionary:
 		"detailed_agent_steps": _detailed_agent_steps,
 		"aggregate_agent_steps": _aggregate_agent_steps,
 		"storage": _store.storage_metrics(),
+		"feedback": _store.feedback_summary(),
 		"location_counts": location_counts,
 		"checksum": "%08x" % (
 			_random_state ^ tick ^ (_store.size() << 4)
 			^ (employed << 11) ^ (rumor_edges << 17) ^ _job_change_count
 		),
 	}
+
+
+func get_ms6_metrics() -> Dictionary:
+	return {
+		"status": _ms6_backend_status,
+		"update_count": _ms6_update_count,
+		"max_error": _ms6_max_error,
+		"summary_max_error": _ms6_summary_max_error,
+		"last_elapsed_usec": _ms6_last_elapsed_usec,
+		"gpu_disabled": _ms6_gpu_disabled,
+		"gpu_unavailable": _ms6_gpu_unavailable,
+		"agent_threshold": MS6_GPU_AGENT_THRESHOLD,
+		"parity_tolerance": MS6_PARITY_TOLERANCE,
+		"full_parity_interval": MS6_FULL_PARITY_INTERVAL,
+		"feedback": _store.feedback_summary(),
+		"gpu_backend": _gpu_backend.get_metrics(),
+		"spatial": get_ms6_spatial_metrics(),
+	}
+
+
+func close_ms6_backend() -> void:
+	_gpu_backend.close()
+	_spatial_backend.close()
+
+
+func set_ms6_gpu_enabled(enabled: bool) -> void:
+	_ms6_prefer_gpu = enabled
+
+
+func get_ms6_spatial_metrics() -> Dictionary:
+	return {
+		"status": _ms6_spatial_status,
+		"update_count": _ms6_spatial_update_count,
+		"mismatch_count": _ms6_spatial_mismatch_count,
+		"gpu_disabled": _ms6_spatial_gpu_disabled,
+		"gpu_unavailable": _ms6_spatial_gpu_unavailable,
+		"interval": MS6_SPATIAL_INTERVAL,
+		"radius": MS6_SPATIAL_RADIUS,
+		"neighbor_count": _spatial_neighbor_count(),
+		"gossip_sources": _spatial_gossip_source_count,
+		"backend": _spatial_backend.get_metrics(),
+	}
+
+
+func run_ms6_spatial_batch(prefer_gpu: bool = true) -> Dictionary:
+	var positions: PackedFloat32Array = _store.export_spatial_positions(tick)
+	var parameters := {
+		"world_width": 2400.0,
+		"world_height": 1450.0,
+		"cell_size": 96.0,
+		"radius": MS6_SPATIAL_RADIUS,
+	}
+	var cpu: Dictionary = _spatial_backend.find_nearest(positions, parameters, false)
+	if not bool(cpu.get("ok", false)):
+		_ms6_spatial_status = "CPU_ERROR"
+		return {"ok": false, "error": "CPU_SPATIAL_REFERENCE_FAILED"}
+	var should_attempt_gpu: bool = (
+		prefer_gpu and not _ms6_spatial_gpu_disabled and not _ms6_spatial_gpu_unavailable
+		and _store.size() >= MS6_GPU_AGENT_THRESHOLD
+	)
+	var preferred: Dictionary = (
+		_spatial_backend.find_nearest(positions, parameters, true)
+		if should_attempt_gpu else cpu
+	)
+	var mismatch_count := 0
+	if bool(preferred.get("ok", false)) and str(preferred.backend) == "GPU":
+		mismatch_count = _neighbor_mismatch_count(cpu.neighbors, preferred.neighbors)
+	_ms6_spatial_mismatch_count = mismatch_count
+	if str(preferred.get("backend", "")) == "GPU" and mismatch_count == 0:
+		_ms6_spatial_status = "GPU_SHADOW_VERIFIED"
+	elif str(preferred.get("backend", "")) == "GPU":
+		_ms6_spatial_status = "GPU_PARITY_FAILED"
+		_ms6_spatial_gpu_disabled = true
+	else:
+		_ms6_spatial_status = (
+			"CPU_FALLBACK"
+			if prefer_gpu and (should_attempt_gpu or _ms6_spatial_gpu_unavailable)
+			else "CPU"
+		)
+		if should_attempt_gpu and not str(preferred.get("gpu_error", "")).is_empty():
+			_ms6_spatial_gpu_unavailable = true
+	_spatial_neighbors = cpu.neighbors
+	_ms6_spatial_update_count += 1
+	return {
+		"ok": true,
+		"status": _ms6_spatial_status,
+		"agent_count": _store.size(),
+		"neighbor_count": int(cpu.neighbor_count),
+		"checksum": str(cpu.checksum),
+		"mismatch_count": mismatch_count,
+		"gpu_attempted": should_attempt_gpu,
+		"gpu_error": str(preferred.get("gpu_error", "")),
+		"canonical_backend": "CPU",
+	}
+
+
+func run_ms6_feedback_batch(prefer_gpu: bool = true) -> Dictionary:
+	var started_usec := Time.get_ticks_usec()
+	var input: PackedFloat32Array = _store.export_feedback_buffer()
+	var parameters := _feedback_parameters()
+	var cpu: Dictionary = _gpu_backend.run_feedback(input, parameters, false)
+	if not bool(cpu.get("ok", false)):
+		_ms6_backend_status = "CPU_ERROR"
+		return {"ok": false, "error": "CPU_REFERENCE_FAILED"}
+	var should_attempt_gpu: bool = (
+		prefer_gpu and not _ms6_gpu_disabled and not _ms6_gpu_unavailable
+		and _store.size() >= MS6_GPU_AGENT_THRESHOLD
+	)
+	var parity_due := _ms6_update_count % MS6_FULL_PARITY_INTERVAL == 0
+	var upload_range: Dictionary = (
+		{} if parity_due else {"ranges": _store.feedback_dirty_ranges()}
+	)
+	var preferred: Dictionary = (
+		_gpu_backend.run_feedback(input, parameters, true, parity_due, upload_range)
+		if should_attempt_gpu else cpu
+	)
+	var gpu_completed := bool(preferred.get("ok", false)) and str(preferred.backend) == "GPU"
+	var maximum_error := 0.0
+	if gpu_completed and parity_due:
+		maximum_error = _maximum_buffer_error(cpu.values, preferred.values)
+	var summary_error := _maximum_summary_error(cpu.summary, preferred.get("summary", {}))
+	_ms6_max_error = maximum_error
+	_ms6_summary_max_error = summary_error
+	if not bool(preferred.get("ok", false)):
+		_ms6_backend_status = "CPU_FALLBACK"
+	elif (
+		gpu_completed and parity_due and maximum_error <= MS6_PARITY_TOLERANCE
+		and summary_error <= MS6_PARITY_TOLERANCE
+	):
+		_ms6_backend_status = "GPU_SHADOW_VERIFIED"
+		_store.clear_feedback_dirty_range()
+	elif gpu_completed and parity_due:
+		_ms6_backend_status = "GPU_PARITY_FAILED"
+		_ms6_gpu_disabled = true
+	elif gpu_completed and summary_error <= MS6_PARITY_TOLERANCE:
+		_ms6_backend_status = "GPU_SHADOW_SUMMARY"
+		_store.clear_feedback_dirty_range()
+	elif gpu_completed:
+		_ms6_backend_status = "GPU_SUMMARY_FAILED"
+		_ms6_gpu_disabled = true
+	else:
+		_ms6_backend_status = (
+			"CPU_FALLBACK" if prefer_gpu and (should_attempt_gpu or _ms6_gpu_unavailable)
+			else "CPU"
+		)
+		if should_attempt_gpu and not str(preferred.get("gpu_error", "")).is_empty():
+			_ms6_gpu_unavailable = true
+	if not _store.apply_feedback_buffer(cpu.values):
+		_ms6_backend_status = "APPLY_FAILED"
+		return {"ok": false, "error": "PACKED_BUFFER_APPLY_FAILED"}
+	_ms6_update_count += 1
+	_ms6_last_elapsed_usec = Time.get_ticks_usec() - started_usec
+	return {
+		"ok": true,
+		"status": _ms6_backend_status,
+		"agent_count": _store.size(),
+		"max_error": maximum_error,
+		"summary_max_error": summary_error,
+		"gpu_attempted": should_attempt_gpu,
+		"parity_performed": should_attempt_gpu and parity_due,
+		"gpu_error": str(preferred.get("gpu_error", "")),
+		"uploaded_agent_count": int(preferred.get("uploaded_agent_count", 0)),
+		"canonical_backend": "CPU",
+		"elapsed_usec": _ms6_last_elapsed_usec,
+		"feedback": _store.feedback_summary(),
+	}
+
+
+func _maximum_summary_error(cpu_summary: Dictionary, gpu_summary: Dictionary) -> float:
+	if gpu_summary.is_empty():
+		return 0.0
+	var maximum_error := 0.0
+	for key in ["average_wealth", "average_stress", "average_spending", "average_activity"]:
+		maximum_error = maxf(
+			maximum_error,
+			absf(float(cpu_summary.get(key, 0.0)) - float(gpu_summary.get(key, 0.0)))
+		)
+	return maximum_error
+
+
+func _neighbor_mismatch_count(left: PackedInt32Array, right: PackedInt32Array) -> int:
+	if left.size() != right.size():
+		return maxi(left.size(), right.size())
+	var count := 0
+	for index in range(left.size()):
+		if left[index] != right[index]:
+			count += 1
+	return count
+
+
+func _spatial_neighbor_count() -> int:
+	var count := 0
+	for neighbor_index in _spatial_neighbors:
+		if neighbor_index >= 0:
+			count += 1
+	return count
 
 
 func get_agent_view(agent_id: int) -> Dictionary:
@@ -182,10 +409,15 @@ func resolve_contextual_activity(agent_id: int, activity: String) -> Dictionary:
 		])
 		var receiver: Dictionary = _store.get_agent(receiver_id)
 		var desired_amount := 75 + posmod(agent_id * 31 + tick * 17, 176)
+		desired_amount = int(round(
+			float(desired_amount) * (0.65 + float(payer.get("spending", 0.4)) * 0.70)
+		))
 		transfer_amount = mini(desired_amount, maxi(0, int(payer.money_cents)))
 		if transfer_amount > 0:
 			payer["money_cents"] = int(payer.money_cents) - transfer_amount
 			receiver["money_cents"] = int(receiver.money_cents) + transfer_amount
+			_sync_financial_feedback(payer)
+			_sync_financial_feedback(receiver)
 			_store.update_agent(payer)
 			_store.update_agent(receiver)
 			_money_transfer_count += 1
@@ -252,6 +484,13 @@ func _build_population(population_size: int) -> void:
 		var rumors: Array[int] = []
 		if index < 12:
 			rumors.append(index + 1)
+		var money_cents := 4_000 + (_next_random_int() % 196_001)
+		var wealth := clampf(float(money_cents) / 200_000.0, 0.02, 1.0)
+		var stress := clampf(
+			(0.16 if employed else 0.48) + float(agent_id % 11) * 0.012,
+			0.0, 1.0
+		)
+		var spending := clampf(wealth * (1.0 - stress * 0.60), 0.0, 1.0)
 		var agent := {
 			"id": agent_id,
 			"household_id": household_id,
@@ -260,7 +499,11 @@ func _build_population(population_size: int) -> void:
 			"employment_status": "EMPLOYED" if employed else "UNEMPLOYED",
 			"schedule_kind": schedule_kind,
 			"current_place_id": 3,
-			"money_cents": 4_000 + (_next_random_int() % 196_001),
+			"money_cents": money_cents,
+			"wealth": wealth,
+			"stress": stress,
+			"spending": spending,
+			"activity_level": 0.68 if employed else 0.42,
 			"social_group_ids": group_ids,
 			"local_contact_ids": [] as Array[int],
 			"rumor_ids": rumors,
@@ -317,10 +560,23 @@ func _propagate_gossip() -> void:
 		else:
 			_aggregate_agent_steps += 1
 		var agent: Dictionary = _store.get_agent(agent_id)
-		if agent.local_contact_ids.is_empty():
+		var source_id := -1
+		var spatial_index := agent_id - FIRST_AGENT_ID
+		if (
+			tick % MS6_SPATIAL_INTERVAL == 0
+			and spatial_index >= 0 and spatial_index < _spatial_neighbors.size()
+			and int(_spatial_neighbors[spatial_index]) >= 0
+		):
+			source_id = FIRST_AGENT_ID + int(_spatial_neighbors[spatial_index])
+			_spatial_gossip_source_count += 1
+		elif not agent.local_contact_ids.is_empty():
+			var contact_index: int = (
+				(_next_random_int() + agent_id + tick) % agent.local_contact_ids.size()
+			)
+			source_id = int(agent.local_contact_ids[contact_index])
+		if source_id < 0:
 			continue
-		var contact_index: int = (_next_random_int() + agent_id + tick) % agent.local_contact_ids.size()
-		var source: Dictionary = _store.get_agent(int(agent.local_contact_ids[contact_index]))
+		var source: Dictionary = _store.get_agent(source_id)
 		if source.rumor_ids.is_empty():
 			continue
 		var rumor_id := int(source.rumor_ids[(_next_random_int() + tick) % source.rumor_ids.size()])
@@ -357,8 +613,14 @@ func _transfer_money_between_contacts() -> void:
 		var receiver_id := int(payer.local_contact_ids[_next_random_int() % payer.local_contact_ids.size()])
 		var receiver: Dictionary = _store.get_agent(receiver_id)
 		var amount := 25 + (_next_random_int() % 176)
+		amount = maxi(1, int(round(
+			float(amount) * (0.65 + float(payer.get("spending", 0.4)) * 0.70)
+		)))
+		amount = mini(amount, int(payer.money_cents))
 		payer["money_cents"] = int(payer.money_cents) - amount
 		receiver["money_cents"] = int(receiver.money_cents) + amount
+		_sync_financial_feedback(payer)
+		_sync_financial_feedback(receiver)
 		_store.update_agent(payer)
 		_store.update_agent(receiver)
 		_money_transfer_count += 1
@@ -367,11 +629,12 @@ func _transfer_money_between_contacts() -> void:
 func _update_employment() -> void:
 	var hires := 0
 	var departures := 0
+	var feedback: Dictionary = _store.feedback_summary()
 	var cohort_keys: Array[String] = _store.get_cohort_keys()
 	for cohort_key: String in cohort_keys:
 		var members: Array[int] = _store.get_cohort_agent_ids(cohort_key)
 		var rate_per_thousand := _employment_transition_rate(
-			cohort_key.contains(":UNEMPLOYED:")
+			cohort_key.contains(":UNEMPLOYED:"), feedback
 		)
 		var changed_ids := _select_cohort_changes(members, rate_per_thousand)
 		for agent_id: int in changed_ids:
@@ -380,12 +643,16 @@ func _update_employment() -> void:
 				agent["employment_status"] = "EMPLOYED"
 				agent["workplace_organization_id"] = 1 if (_next_random_int() % 100) < 36 else 2
 				agent["schedule_kind"] = "DAY_WORK" if (_next_random_int() % 100) < 75 else "EVENING_SHIFT"
+				agent["stress"] = clampf(float(agent.stress) - 0.08, 0.0, 1.0)
+				agent["activity_level"] = clampf(float(agent.activity_level) + 0.12, 0.0, 1.0)
 				_job_change_count += 1
 				hires += 1
 			else:
 				agent["employment_status"] = "UNEMPLOYED"
 				agent["workplace_organization_id"] = 0
 				agent["schedule_kind"] = "UNEMPLOYED"
+				agent["stress"] = clampf(float(agent.stress) + 0.12, 0.0, 1.0)
+				agent["activity_level"] = clampf(float(agent.activity_level) - 0.10, 0.0, 1.0)
 				_job_change_count += 1
 				departures += 1
 			_store.update_agent(agent)
@@ -456,18 +723,22 @@ func _select_cohort_changes(members: Array[int], rate_per_thousand: int) -> Arra
 	return result
 
 
-func _employment_transition_rate(is_unemployed: bool) -> int:
+func _employment_transition_rate(is_unemployed: bool, feedback: Dictionary) -> int:
 	if _social_field_influence.is_empty():
 		return 45 if is_unemployed else 8
 	var business := float(_social_field_influence.get("business_health", 0.6))
 	var field_stress := float(_social_field_influence.get("stress", 0.2))
 	var tension := float(_social_field_influence.get("social_tension", 0.15))
+	var agent_stress := float(feedback.get("average_stress", field_stress))
+	var agent_activity := float(feedback.get("average_activity", 0.5))
 	if is_unemployed:
 		return clampi(int(round(
-			25.0 + business * 35.0 - field_stress * 10.0 - tension * 5.0
+			25.0 + business * 35.0 - field_stress * 7.0 - agent_stress * 6.0
+			- tension * 5.0 + agent_activity * 3.0
 		)), 8, 60)
 	return clampi(int(round(
-		3.0 + (1.0 - business) * 8.0 + field_stress * 6.0 + tension * 4.0
+		3.0 + (1.0 - business) * 8.0 + field_stress * 4.0
+		+ agent_stress * 4.0 + tension * 4.0
 	)), 3, 35)
 
 
@@ -477,6 +748,35 @@ func _total_money_cents() -> int:
 		var agent: Dictionary = _store.get_agent(agent_id)
 		total += int(agent.money_cents)
 	return total
+
+
+func _sync_financial_feedback(agent: Dictionary) -> void:
+	var observed_wealth := clampf(float(agent.money_cents) / 200_000.0, 0.02, 1.0)
+	agent["wealth"] = lerpf(float(agent.get("wealth", observed_wealth)), observed_wealth, 0.08)
+	agent["stress"] = clampf(
+		float(agent.get("stress", 0.2)) + (0.45 - observed_wealth) * 0.004,
+		0.0, 1.0
+	)
+
+
+func _feedback_parameters() -> Dictionary:
+	var field_stress := float(_social_field_influence.get("stress", 0.20))
+	var business_health := float(_social_field_influence.get("business_health", 0.55))
+	var tension := float(_social_field_influence.get("social_tension", 0.15))
+	return {
+		"stress_delta": (field_stress - 0.30) * 0.035,
+		"wealth_delta": (business_health - 0.50) * 0.012,
+		"spending_sensitivity": 0.06 + tension * 0.16,
+	}
+
+
+func _maximum_buffer_error(first: PackedFloat32Array, second: PackedFloat32Array) -> float:
+	if first.size() != second.size():
+		return INF
+	var maximum_error := 0.0
+	for index in range(first.size()):
+		maximum_error = maxf(maximum_error, absf(float(first[index]) - float(second[index])))
+	return maximum_error
 
 
 func _next_random_int() -> int:

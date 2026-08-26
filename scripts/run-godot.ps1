@@ -1,6 +1,7 @@
 param(
 	[string]$GodotCommand = "godot",
-	[switch]$Editor
+	[switch]$Editor,
+	[switch]$Gpu
 )
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -23,6 +24,9 @@ if (Test-Path -LiteralPath $envFile) {
 $godotArgs = @("--path", (Join-Path $projectRoot "game"))
 if ($Editor) {
 	$godotArgs = @("--editor") + $godotArgs
+}
+if ($Gpu) {
+	$godotArgs += @("--rendering-method", "mobile")
 }
 
 & $GodotCommand @godotArgs

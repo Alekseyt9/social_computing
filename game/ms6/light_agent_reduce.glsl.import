@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c33j7nc5ejhkk"
+path="res://.godot/imported/light_agent_reduce.glsl-c077a99bd0822a6c444b51d4121c6c84.res"
+
+[deps]
+
+source_file="res://ms6/light_agent_reduce.glsl"
+dest_files=["res://.godot/imported/light_agent_reduce.glsl-c077a99bd0822a6c444b51d4121c6c84.res"]
+
+[params]
+

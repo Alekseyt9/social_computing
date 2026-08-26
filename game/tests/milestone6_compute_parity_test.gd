@@ -25,12 +25,14 @@ func _init() -> void:
 	for index in range(cpu.values.size()):
 		maximum_error = maxf(maximum_error, absf(float(cpu.values[index]) - float(preferred.values[index])))
 	if maximum_error > 0.00001:
+		backend.close()
 		_fail("GPU/CPU parity error is too large: %.8f" % maximum_error)
 		return
 	print("MILESTONE6_COMPUTE_OK agents=4096 backend=%s max_error=%.8f fallback=%s gpu_error=%s" % [
 		str(preferred.backend), maximum_error, str(preferred.backend != "GPU"),
 		str(preferred.get("gpu_error", "none")),
 	])
+	backend.close()
 	quit(0)
 
 

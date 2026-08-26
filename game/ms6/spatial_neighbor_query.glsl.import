@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://d3gpdpfhv0lns"
+path="res://.godot/imported/spatial_neighbor_query.glsl-95c9ed029b76f06178c88d4c9927daff.res"
+
+[deps]
+
+source_file="res://ms6/spatial_neighbor_query.glsl"
+dest_files=["res://.godot/imported/spatial_neighbor_query.glsl-95c9ed029b76f06178c88d4c9927daff.res"]
+
+[params]
+
