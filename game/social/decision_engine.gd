@@ -127,6 +127,20 @@ static func _action_costs(action_type: String, context: Dictionary) -> Dictionar
 			defaults.risk = 0.28
 			defaults.secrecy = 0.35
 
+	# Persistent NPCs read district fields as ambient pressure. The field never
+	# decides an action by itself; it modifies the same explicit utility costs.
+	defaults.risk = clampf(
+		float(defaults.risk)
+		+ float(context.get("district_fear", 0.0)) * 0.08
+		+ float(context.get("district_social_tension", 0.0)) * 0.04,
+		0.0, 1.0
+	)
+	defaults.personal_cost = clampf(
+		float(defaults.personal_cost)
+		+ (1.0 - float(context.get("district_employment", 1.0))) * 0.04,
+		0.0, 1.0
+	)
+
 	for key: String in defaults:
 		if context.has(key):
 			defaults[key] = clampf(float(context[key]), 0.0, 1.0)

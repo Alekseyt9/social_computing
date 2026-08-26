@@ -14,6 +14,10 @@ var _story_persistent_count: int
 var _light_agent_ids: Dictionary = {}
 var _persistent_profiles: Dictionary = {}
 var _transition_count: int = 0
+var _focus_update_count: int = 0
+var _last_focus_place_id: int = -1
+var _last_socially_relevant_ids: Array[int] = []
+var _last_light_budget: int = 60
 
 
 func _init(
@@ -69,6 +73,63 @@ func refine_all() -> Dictionary:
 	_transition_count += _symmetric_difference_size(previous_ids, _light_agent_ids.keys())
 	_sync_population_detail_sets()
 	return {"ok": true, "state": snapshot()}
+
+
+func update_relevance_focus(
+	player_place_id: int,
+	socially_relevant_ids: Array = [],
+	light_budget: int = 60
+) -> Dictionary:
+	var bounded_budget := clampi(light_budget, 1, _population.get_agent_ids().size())
+	var relevant_set: Dictionary = {}
+	for value: Variant in socially_relevant_ids:
+		var agent_id := int(value)
+		if not _population.get_agent_view(agent_id).is_empty():
+			relevant_set[agent_id] = true
+	for persistent_id: int in _persistent_profiles:
+		var persistent_agent: Dictionary = _population.get_agent_view(persistent_id)
+		for contact_id: int in persistent_agent.get("local_contact_ids", []):
+			relevant_set[contact_id] = true
+
+	var local_set: Dictionary = {}
+	for agent_id: int in _population.get_agent_ids_at_place(player_place_id):
+		local_set[agent_id] = true
+	var ranked: Array[Dictionary] = []
+	for agent_id: int in _population.get_agent_ids():
+		if _persistent_profiles.has(agent_id):
+			continue
+		var score := 0
+		if relevant_set.has(agent_id):
+			score += 100
+		if local_set.has(agent_id):
+			score += 50
+		if _light_agent_ids.has(agent_id):
+			score += 5 # hysteresis prevents churn between equal local candidates
+		ranked.append({"id": agent_id, "score": score})
+	ranked.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		if int(left.score) == int(right.score):
+			return int(left.id) < int(right.id)
+		return int(left.score) > int(right.score)
+	)
+	var next_light_ids: Dictionary = {}
+	for index in range(mini(bounded_budget, ranked.size())):
+		next_light_ids[int(ranked[index].id)] = true
+	var previous_ids := _light_agent_ids.keys()
+	_light_agent_ids = next_light_ids
+	var changed := _symmetric_difference_size(previous_ids, _light_agent_ids.keys())
+	_transition_count += changed
+	_focus_update_count += 1
+	_last_focus_place_id = player_place_id
+	_last_socially_relevant_ids = _sorted_int_keys(relevant_set)
+	_last_light_budget = bounded_budget
+	_sync_population_detail_sets()
+	return {
+		"ok": true,
+		"changed_tier_count": changed,
+		"local_candidate_count": local_set.size(),
+		"social_candidate_count": relevant_set.size(),
+		"state": snapshot(),
+	}
 
 
 func promote_to_persistent(agent_id: int, reason: String = "PLAYER_RELEVANCE") -> Dictionary:
@@ -164,6 +225,12 @@ func snapshot() -> Dictionary:
 		"refined_light_ids": _sorted_int_keys(_light_agent_ids),
 		"promoted_persistent_ids": _sorted_int_keys(_persistent_profiles),
 		"transition_count": _transition_count,
+		"focus_policy": {
+			"update_count": _focus_update_count,
+			"player_place_id": _last_focus_place_id,
+			"light_budget": _last_light_budget,
+			"socially_relevant_ids": _last_socially_relevant_ids.duplicate(),
+		},
 		"conservation": conservation,
 	}
 

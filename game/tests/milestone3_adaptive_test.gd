@@ -9,6 +9,10 @@ func _init() -> void:
 
 func _run() -> void:
 	var world := SimulationWorldScript.new(271828)
+	var storage: Dictionary = world.get_light_population_snapshot().storage
+	if str(storage.layout) != "STRUCT_OF_ARRAYS" or int(storage.dictionary_records) != 0:
+		_fail("Light population is not backed by compact packed columns: %s" % storage)
+		return
 	var initial: Dictionary = world.get_adaptive_population_snapshot()
 	if not _assert_conservation(initial, "initial"):
 		return

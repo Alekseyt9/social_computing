@@ -4,6 +4,7 @@ extends RefCounted
 const HouseholdScript := preload("res://core/model/household.gd")
 const SocialGroupScript := preload("res://core/model/social_group.gd")
 const LightScheduleScript := preload("res://agents/light_schedule.gd")
+const PackedAgentStoreScript := preload("res://adaptive/packed_light_agent_store.gd")
 
 const FIRST_AGENT_ID := 10_000
 const DEFAULT_POPULATION := 1_200
@@ -22,7 +23,7 @@ const _LCG_MASK := 0x7fffffff
 
 var tick: int = 0
 var _random_state: int
-var _agents: Dictionary = {}
+var _store: RefCounted
 var _households: Dictionary = {}
 var _groups: Dictionary = {}
 var _job_change_count: int = 0
@@ -33,10 +34,12 @@ var _pending_events: Array[Dictionary] = []
 var _detailed_agent_steps: int = 0
 var _aggregate_agent_steps: int = 0
 var _detailed_agent_ids: Dictionary = {}
+var _social_field_influence: Dictionary = {}
 
 
 func _init(initial_seed: int, population_size: int = DEFAULT_POPULATION) -> void:
 	_random_state = (initial_seed ^ 0x51f15e) & _LCG_MASK
+	_store = PackedAgentStoreScript.new(FIRST_AGENT_ID, maxi(1, population_size))
 	_build_groups()
 	_build_population(maxi(1, population_size))
 	_build_local_contacts()
@@ -61,7 +64,8 @@ func snapshot() -> Dictionary:
 	var location_counts: Dictionary = {1: 0, 2: 0, 3: 0}
 	var contact_edges := 0
 	var rumor_edges := 0
-	for agent: Dictionary in _agents.values():
+	for agent_id: int in get_agent_ids():
+		var agent: Dictionary = get_agent_view(agent_id)
 		if str(agent.employment_status) == "EMPLOYED":
 			employed += 1
 		var place_id := int(agent.current_place_id)
@@ -71,9 +75,9 @@ func snapshot() -> Dictionary:
 	var total_money := _total_money_cents()
 	return {
 		"tick": tick,
-		"population": _agents.size(),
+		"population": _store.size(),
 		"employed": employed,
-		"unemployed": _agents.size() - employed,
+		"unemployed": _store.size() - employed,
 		"households": _households.size(),
 		"workplaces": 2,
 		"social_groups": _groups.size(),
@@ -86,23 +90,39 @@ func snapshot() -> Dictionary:
 		"money_conserved": total_money == _initial_total_money_cents,
 		"detailed_agent_steps": _detailed_agent_steps,
 		"aggregate_agent_steps": _aggregate_agent_steps,
+		"storage": _store.storage_metrics(),
 		"location_counts": location_counts,
 		"checksum": "%08x" % (
-			_random_state ^ tick ^ (_agents.size() << 4)
+			_random_state ^ tick ^ (_store.size() << 4)
 			^ (employed << 11) ^ (rumor_edges << 17) ^ _job_change_count
 		),
 	}
 
 
 func get_agent_view(agent_id: int) -> Dictionary:
-	var agent: Dictionary = _agents.get(agent_id, {})
-	return agent.duplicate(true)
+	var agent: Dictionary = _store.get_agent(agent_id)
+	if agent.is_empty():
+		return agent
+	var workplace_id := int(agent.workplace_organization_id)
+	var work_place_id := 1 if workplace_id == 1 else 2
+	agent["current_place_id"] = LightScheduleScript.resolve_place(
+		str(agent.schedule_kind), tick, int(agent.home_place_id), work_place_id
+	)
+	return agent
 
 
 func get_agent_ids() -> Array[int]:
+	return _store.get_agent_ids()
+
+
+func get_agent_ids_at_place(place_id: int) -> Array[int]:
 	var result: Array[int] = []
-	for agent_id: int in _agents:
-		result.append(agent_id)
+	for cohort_key: String in _store.get_cohort_keys():
+		var members: Array[int] = _store.get_cohort_agent_ids(cohort_key)
+		if members.is_empty():
+			continue
+		if int(get_agent_view(members[0]).current_place_id) == place_id:
+			result.append_array(members)
 	result.sort()
 	return result
 
@@ -121,10 +141,14 @@ func set_detail_tiers(light_agent_ids: Array, persistent_agent_ids: Array) -> vo
 		_detailed_agent_ids[int(value)] = true
 
 
+func set_social_field_influence(fields: Dictionary) -> void:
+	_social_field_influence = fields.duplicate(true)
+
+
 func validate() -> Array[String]:
 	var errors: Array[String] = []
-	for agent_id: int in _agents:
-		var agent: Dictionary = _agents[agent_id]
+	for agent_id: int in get_agent_ids():
+		var agent: Dictionary = _store.get_agent(agent_id)
 		var household_id := int(agent.household_id)
 		if not _households.has(household_id):
 			errors.append("Agent %d has invalid household %d" % [agent_id, household_id])
@@ -135,7 +159,7 @@ func validate() -> Array[String]:
 			if not _groups.has(group_id):
 				errors.append("Agent %d has invalid group %d" % [agent_id, group_id])
 		for contact_id: int in agent.local_contact_ids:
-			if contact_id == agent_id or not _agents.has(contact_id):
+			if contact_id == agent_id or not _store.has(contact_id):
 				errors.append("Agent %d has invalid local contact %d" % [agent_id, contact_id])
 		if errors.size() >= 20:
 			break
@@ -184,16 +208,16 @@ func _build_population(population_size: int) -> void:
 			"local_contact_ids": [] as Array[int],
 			"rumor_ids": rumors,
 		}
-		_agents[agent_id] = agent
+		_store.add_agent(agent)
 		_households[household_id].add_member(agent_id)
 		for group_id: int in group_ids:
 			_groups[group_id].add_member(agent_id)
 
 
 func _build_local_contacts() -> void:
-	var population_size := _agents.size()
+	var population_size: int = _store.size()
 	for agent_id: int in get_agent_ids():
-		var agent: Dictionary = _agents[agent_id]
+		var agent: Dictionary = _store.get_agent(agent_id)
 		var contacts: Array[int] = []
 		var household: RefCounted = _households[int(agent.household_id)]
 		for member_id: int in household.member_ids:
@@ -207,41 +231,45 @@ func _build_local_contacts() -> void:
 			if contact_id != agent_id and contact_id not in contacts:
 				contacts.append(contact_id)
 		agent["local_contact_ids"] = contacts
-		_agents[agent_id] = agent
+		_store.update_agent(agent)
 
 
 func _update_locations() -> void:
-	for agent_id: int in _agents:
-		var agent: Dictionary = _agents[agent_id]
+	# Aggregate locations are derived from schedule cohorts on demand. Only the
+	# detailed working set receives a materialized location update.
+	for agent_id: int in _detail_agent_ids():
+		var agent: Dictionary = get_agent_view(agent_id)
 		var workplace_id := int(agent.workplace_organization_id)
 		var work_place_id := 1 if workplace_id == 1 else 2
 		agent["current_place_id"] = LightScheduleScript.resolve_place(
 			str(agent.schedule_kind), tick, int(agent.home_place_id), work_place_id
 		)
-		_agents[agent_id] = agent
+		_store.update_agent(agent)
 
 
 func _propagate_gossip() -> void:
 	var transfers_before := _gossip_transfer_count
-	for agent_id: int in get_agent_ids():
-		var is_detailed := _detailed_agent_ids.has(agent_id)
-		if is_detailed:
+	var candidates := _detail_agent_ids()
+	var aggregate_candidates: Array[int] = []
+	if tick % 72 == 0:
+		aggregate_candidates = _cohort_sample_ids(6)
+		candidates.append_array(aggregate_candidates)
+	for agent_id: int in candidates:
+		if _detailed_agent_ids.has(agent_id):
 			_detailed_agent_steps += 1
-		elif tick % 72 == 0:
-			_aggregate_agent_steps += 1
 		else:
-			continue
-		var agent: Dictionary = _agents[agent_id]
+			_aggregate_agent_steps += 1
+		var agent: Dictionary = _store.get_agent(agent_id)
 		if agent.local_contact_ids.is_empty():
 			continue
 		var contact_index: int = (_next_random_int() + agent_id + tick) % agent.local_contact_ids.size()
-		var source: Dictionary = _agents[int(agent.local_contact_ids[contact_index])]
+		var source: Dictionary = _store.get_agent(int(agent.local_contact_ids[contact_index]))
 		if source.rumor_ids.is_empty():
 			continue
 		var rumor_id := int(source.rumor_ids[(_next_random_int() + tick) % source.rumor_ids.size()])
 		if rumor_id not in agent.rumor_ids and agent.rumor_ids.size() < 8:
 			agent.rumor_ids.append(rumor_id)
-			_agents[agent_id] = agent
+			_store.update_agent(agent)
 			_gossip_transfer_count += 1
 	if tick % 72 == 0 and _gossip_transfer_count > transfers_before:
 		var trend := _find_trending_rumor()
@@ -256,48 +284,54 @@ func _propagate_gossip() -> void:
 
 
 func _transfer_money_between_contacts() -> void:
-	for agent_id: int in get_agent_ids():
-		var is_detailed := _detailed_agent_ids.has(agent_id)
-		if is_detailed:
+	var candidates := _detail_agent_ids()
+	if tick % 96 == 0:
+		candidates.append_array(_cohort_sample_ids(19))
+	for agent_id: int in candidates:
+		if _detailed_agent_ids.has(agent_id):
 			_detailed_agent_steps += 1
-		elif tick % 96 == 0:
-			_aggregate_agent_steps += 1
 		else:
-			continue
+			_aggregate_agent_steps += 1
 		if agent_id % 19 != tick % 19:
 			continue
-		var payer: Dictionary = _agents[agent_id]
+		var payer: Dictionary = _store.get_agent(agent_id)
 		if payer.local_contact_ids.is_empty() or int(payer.money_cents) < 100:
 			continue
 		var receiver_id := int(payer.local_contact_ids[_next_random_int() % payer.local_contact_ids.size()])
-		var receiver: Dictionary = _agents[receiver_id]
+		var receiver: Dictionary = _store.get_agent(receiver_id)
 		var amount := 25 + (_next_random_int() % 176)
 		payer["money_cents"] = int(payer.money_cents) - amount
 		receiver["money_cents"] = int(receiver.money_cents) + amount
-		_agents[agent_id] = payer
-		_agents[receiver_id] = receiver
+		_store.update_agent(payer)
+		_store.update_agent(receiver)
 		_money_transfer_count += 1
 
 
 func _update_employment() -> void:
 	var hires := 0
 	var departures := 0
-	for agent_id: int in get_agent_ids():
-		var agent: Dictionary = _agents[agent_id]
-		var roll := (_next_random_int() + agent_id + tick) % 1000
-		if str(agent.employment_status) == "UNEMPLOYED" and roll < 45:
-			agent["employment_status"] = "EMPLOYED"
-			agent["workplace_organization_id"] = 1 if (_next_random_int() % 100) < 36 else 2
-			agent["schedule_kind"] = "DAY_WORK" if (_next_random_int() % 100) < 75 else "EVENING_SHIFT"
-			_job_change_count += 1
-			hires += 1
-		elif str(agent.employment_status) == "EMPLOYED" and roll < 8:
-			agent["employment_status"] = "UNEMPLOYED"
-			agent["workplace_organization_id"] = 0
-			agent["schedule_kind"] = "UNEMPLOYED"
-			_job_change_count += 1
-			departures += 1
-		_agents[agent_id] = agent
+	var cohort_keys: Array[String] = _store.get_cohort_keys()
+	for cohort_key: String in cohort_keys:
+		var members: Array[int] = _store.get_cohort_agent_ids(cohort_key)
+		var rate_per_thousand := _employment_transition_rate(
+			cohort_key.contains(":UNEMPLOYED:")
+		)
+		var changed_ids := _select_cohort_changes(members, rate_per_thousand)
+		for agent_id: int in changed_ids:
+			var agent: Dictionary = _store.get_agent(agent_id)
+			if str(agent.employment_status) == "UNEMPLOYED":
+				agent["employment_status"] = "EMPLOYED"
+				agent["workplace_organization_id"] = 1 if (_next_random_int() % 100) < 36 else 2
+				agent["schedule_kind"] = "DAY_WORK" if (_next_random_int() % 100) < 75 else "EVENING_SHIFT"
+				_job_change_count += 1
+				hires += 1
+			else:
+				agent["employment_status"] = "UNEMPLOYED"
+				agent["workplace_organization_id"] = 0
+				agent["schedule_kind"] = "UNEMPLOYED"
+				_job_change_count += 1
+				departures += 1
+			_store.update_agent(agent)
 	_update_locations()
 	if hires + departures > 0:
 		_pending_events.append({
@@ -315,7 +349,8 @@ func _update_employment() -> void:
 
 func _find_trending_rumor() -> Dictionary:
 	var counts: Dictionary = {}
-	for agent: Dictionary in _agents.values():
+	for agent_id: int in get_agent_ids():
+		var agent: Dictionary = _store.get_agent(agent_id)
 		for rumor_id: int in agent.rumor_ids:
 			counts[rumor_id] = int(counts.get(rumor_id, 0)) + 1
 	var best_id := -1
@@ -328,9 +363,61 @@ func _find_trending_rumor() -> Dictionary:
 	return {} if best_id == -1 else {"rumor_id": best_id, "reach": best_reach}
 
 
+func _detail_agent_ids() -> Array[int]:
+	var result: Array[int] = []
+	for value: Variant in _detailed_agent_ids.keys():
+		result.append(int(value))
+	result.sort()
+	return result
+
+
+func _cohort_sample_ids(stride: int) -> Array[int]:
+	var result: Array[int] = []
+	for cohort_key: String in _store.get_cohort_keys():
+		var members: Array[int] = _store.get_cohort_agent_ids(cohort_key)
+		if members.is_empty():
+			continue
+		var start := int((tick + members[0]) % maxi(1, stride))
+		for index in range(start, members.size(), maxi(1, stride)):
+			var agent_id := members[index]
+			if not _detailed_agent_ids.has(agent_id):
+				result.append(agent_id)
+	return result
+
+
+func _select_cohort_changes(members: Array[int], rate_per_thousand: int) -> Array[int]:
+	var result: Array[int] = []
+	if members.is_empty() or rate_per_thousand <= 0:
+		return result
+	var numerator := members.size() * rate_per_thousand
+	var change_count := int(numerator / 1000)
+	if _next_random_int() % 1000 < numerator % 1000:
+		change_count += 1
+	var start := _next_random_int() % members.size()
+	for offset in range(mini(change_count, members.size())):
+		result.append(members[(start + offset) % members.size()])
+	return result
+
+
+func _employment_transition_rate(is_unemployed: bool) -> int:
+	if _social_field_influence.is_empty():
+		return 45 if is_unemployed else 8
+	var business := float(_social_field_influence.get("business_health", 0.6))
+	var field_stress := float(_social_field_influence.get("stress", 0.2))
+	var tension := float(_social_field_influence.get("social_tension", 0.15))
+	if is_unemployed:
+		return clampi(int(round(
+			25.0 + business * 35.0 - field_stress * 10.0 - tension * 5.0
+		)), 8, 60)
+	return clampi(int(round(
+		3.0 + (1.0 - business) * 8.0 + field_stress * 6.0 + tension * 4.0
+	)), 3, 35)
+
+
 func _total_money_cents() -> int:
 	var total := 0
-	for agent: Dictionary in _agents.values():
+	for agent_id: int in get_agent_ids():
+		var agent: Dictionary = _store.get_agent(agent_id)
 		total += int(agent.money_cents)
 	return total
 

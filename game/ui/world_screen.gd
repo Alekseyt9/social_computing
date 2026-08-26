@@ -8,6 +8,7 @@ const GroqClientScript := preload("res://llm/groq_client.gd")
 const SocialRendererScript := preload("res://rendering/social_renderer.gd")
 const SocialActionPresenterScript := preload("res://rendering/social_action_presenter.gd")
 const SocialMapPanelScript := preload("res://ui/social_map_panel.gd")
+const AmbientCrowdLayerScript := preload("res://world/ambient_crowd_layer.gd")
 
 const INTERACTION_DISTANCE := 92.0
 const NPC_DATA := [
@@ -37,6 +38,7 @@ var world: RefCounted
 var player: CharacterBody2D
 var groq_client: Node
 var _nearby_npc: CharacterBody2D
+var _nearby_light_citizen: Dictionary = {}
 var _dialogue_npc: CharacterBody2D
 var _npc_by_id: Dictionary = {}
 var _simulation_accumulator := 0.0
@@ -45,6 +47,8 @@ var _pending_fallback := ""
 var _pending_player_line := ""
 var _near_aurora_entrance := false
 var _renderer_debug: Dictionary = {}
+var _last_adaptive_focus_tick: int = -1
+var _ambient_crowd: Node2D
 
 var _prompt_panel: PanelContainer
 var _prompt_label: Label
@@ -60,6 +64,12 @@ var _social_map_overlay: PanelContainer
 var _social_map_control: Control
 var _debug_overlay: PanelContainer
 var _debug_text: RichTextLabel
+var _pulse_overall_label: Label
+var _pulse_signals_label: Label
+var _news_feed_label: RichTextLabel
+var _toast_panel: PanelContainer
+var _toast_label: Label
+var _toast_remaining: float = 0.0
 
 
 func _ready() -> void:
@@ -73,14 +83,17 @@ func _ready() -> void:
 	groq_client.request_failed.connect(_on_groq_failure)
 	add_child(groq_client)
 	_update_hud()
+	_update_adaptive_focus(true)
 
 
 func _process(delta: float) -> void:
+	_update_toast(delta)
 	_simulation_accumulator += delta
 	if _simulation_accumulator >= 1.0:
 		var elapsed_ticks := int(_simulation_accumulator)
 		_simulation_accumulator -= float(elapsed_ticks)
 		world.advance(elapsed_ticks)
+		_update_adaptive_focus(false)
 		_update_hud()
 	if not _dialogue_panel.visible:
 		_update_nearby_npc()
@@ -99,6 +112,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_close_dialogue()
 			elif _nearby_npc != null:
 				_open_dialogue(_nearby_npc)
+			elif not _nearby_light_citizen.is_empty():
+				_activate_nearby_light_citizen()
 			elif _near_aurora_entrance:
 				_open_aurora_entrance()
 			get_viewport().set_input_as_handled()
@@ -116,6 +131,10 @@ func _build_map() -> void:
 	var map := WorldMapScript.new()
 	map.name = "WorldMap"
 	add_child(map)
+	_ambient_crowd = AmbientCrowdLayerScript.new()
+	_ambient_crowd.name = "AmbientCrowd"
+	_ambient_crowd.setup(world)
+	add_child(_ambient_crowd)
 
 
 func _build_player() -> void:
@@ -133,6 +152,27 @@ func _build_player() -> void:
 	camera.limit_bottom = int(WorldMapScript.WORLD_SIZE.y)
 	camera.zoom = Vector2(1.05, 1.05)
 	player.add_child(camera)
+
+
+func _update_adaptive_focus(force: bool) -> void:
+	var current_tick := int(world.tick)
+	if not force and (
+		current_tick == _last_adaptive_focus_tick or current_tick % 12 != 0
+	):
+		return
+	_last_adaptive_focus_tick = current_tick
+	world.update_adaptive_focus(_player_place_id(), [], 60)
+	if _ambient_crowd != null:
+		_ambient_crowd.sync_from_simulation()
+
+
+func _player_place_id() -> int:
+	var position_in_world := player.global_position
+	if position_in_world.y >= 735.0 and position_in_world.x <= 650.0:
+		return 3 # Player Apartment / residential block
+	if position_in_world.x >= 1070.0:
+		return 1 # Aurora side of the district
+	return 2 # Cafe, park and public square
 
 
 func _build_npcs() -> void:
@@ -209,8 +249,79 @@ func _build_hud() -> void:
 	_prompt_panel.add_child(_prompt_label)
 
 	_build_dialogue_panel(canvas)
+	_build_district_pulse(canvas)
+	_build_news_feed(canvas)
+	_build_toast(canvas)
 	_build_social_map(canvas)
 	_build_debug_inspector(canvas)
+
+
+func _build_district_pulse(canvas: CanvasLayer) -> void:
+	var panel := PanelContainer.new()
+	panel.name = "DistrictPulse"
+	panel.position = Vector2(22, 162)
+	panel.size = Vector2(460, 142)
+	panel.add_theme_stylebox_override("panel", _panel_style(Color("162128e8"), Color("526f75"), 12))
+	canvas.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "ПУЛЬС РАЙОНА"
+	title.add_theme_font_size_override("font_size", 13)
+	title.add_theme_color_override("font_color", Color("83cbd2"))
+	box.add_child(title)
+	_pulse_overall_label = Label.new()
+	_pulse_overall_label.add_theme_font_size_override("font_size", 18)
+	box.add_child(_pulse_overall_label)
+	_pulse_signals_label = Label.new()
+	_pulse_signals_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_pulse_signals_label.add_theme_font_size_override("font_size", 12)
+	_pulse_signals_label.add_theme_color_override("font_color", Color("c7d2cd"))
+	box.add_child(_pulse_signals_label)
+
+
+func _build_news_feed(canvas: CanvasLayer) -> void:
+	var panel := PanelContainer.new()
+	panel.name = "NewsFeed"
+	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	panel.position = Vector2(-430, 128)
+	panel.size = Vector2(408, 238)
+	panel.add_theme_stylebox_override("panel", _panel_style(Color("111b20e8"), Color("536b72"), 12))
+	canvas.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "СОБЫТИЯ РАЙОНА"
+	title.add_theme_font_size_override("font_size", 13)
+	title.add_theme_color_override("font_color", Color("e7be7a"))
+	box.add_child(title)
+	_news_feed_label = RichTextLabel.new()
+	_news_feed_label.bbcode_enabled = true
+	_news_feed_label.fit_content = false
+	_news_feed_label.scroll_active = false
+	_news_feed_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_news_feed_label.add_theme_font_size_override("normal_font_size", 11)
+	_news_feed_label.add_theme_color_override("default_color", Color("cbd4cf"))
+	box.add_child(_news_feed_label)
+
+
+func _build_toast(canvas: CanvasLayer) -> void:
+	_toast_panel = PanelContainer.new()
+	_toast_panel.name = "ConsequenceToast"
+	_toast_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_toast_panel.position = Vector2(-260, 28)
+	_toast_panel.size = Vector2(520, 62)
+	_toast_panel.add_theme_stylebox_override("panel", _panel_style(Color("173138f5"), Color("85d4d7"), 12))
+	_toast_panel.visible = false
+	canvas.add_child(_toast_panel)
+	_toast_label = Label.new()
+	_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_toast_label.add_theme_font_size_override("font_size", 15)
+	_toast_label.add_theme_color_override("font_color", Color("eef7ed"))
+	_toast_panel.add_child(_toast_label)
 
 
 func _build_social_map(canvas: CanvasLayer) -> void:
@@ -354,14 +465,60 @@ func _update_nearby_npc() -> void:
 		if distance < closest_distance:
 			closest = npc
 			closest_distance = distance
+	_nearby_light_citizen = {}
+	if _ambient_crowd != null:
+		var ambient_candidate: Dictionary = _ambient_crowd.get_nearest_citizen(
+			player.global_position, closest_distance
+		)
+		if not ambient_candidate.is_empty():
+			_nearby_light_citizen = ambient_candidate
+			closest = null
 	_nearby_npc = closest
 	_near_aurora_entrance = player.global_position.distance_to(Vector2(1385, 425)) < 88.0
-	_prompt_panel.visible = closest != null or _near_aurora_entrance
+	_prompt_panel.visible = (
+		closest != null or not _nearby_light_citizen.is_empty() or _near_aurora_entrance
+	)
 	if closest != null:
 		var identity: Dictionary = world.get_visible_identity(world.player_id, closest.person_id)
 		_prompt_label.text = "[ E ]  Поговорить  ·  %s" % identity.name
+	elif not _nearby_light_citizen.is_empty():
+		_prompt_label.text = "[ E ]  Поговорить  ·  Житель района"
 	elif _near_aurora_entrance:
 		_prompt_label.text = "[ E ]  Войти в Aurora"
+
+
+func _activate_nearby_light_citizen() -> void:
+	if _nearby_light_citizen.is_empty():
+		return
+	var citizen := _nearby_light_citizen.duplicate(true)
+	var agent_id := int(citizen.agent_id)
+	var activation: Dictionary = world.activate_light_agent_as_person(
+		agent_id, "PLAYER_INTERACTION"
+	)
+	if not bool(activation.get("ok", false)):
+		_toast_label.text = "Сейчас житель недоступен для разговора"
+		_toast_remaining = 2.5
+		_toast_panel.visible = true
+		return
+	var npc := _spawn_adaptive_npc(agent_id, citizen)
+	_nearby_light_citizen = {}
+	_ambient_crowd.sync_from_simulation()
+	_open_dialogue(npc)
+
+
+func _spawn_adaptive_npc(agent_id: int, citizen: Dictionary) -> CharacterBody2D:
+	if _npc_by_id.has(agent_id):
+		return _npc_by_id[agent_id]
+	var npc := NpcControllerScript.new()
+	var identity: Dictionary = world.get_visible_identity(world.player_id, agent_id)
+	var zone: Rect2 = _ambient_crowd.get_place_zone(int(citizen.place_id))
+	var accent: Color = citizen.get("accent", Color("8796a0"))
+	npc.setup(agent_id, str(identity.name), zone, accent)
+	npc.name = "AdaptiveNPC_%d" % agent_id
+	npc.position = citizen.position
+	add_child(npc)
+	_npc_by_id[agent_id] = npc
+	return npc
 
 
 func _open_dialogue(npc: CharacterBody2D) -> void:
@@ -375,6 +532,7 @@ func _open_dialogue(npc: CharacterBody2D) -> void:
 	_speaker_label.text = identity.name
 	_role_label.text = identity.role if identity.known else "Вы ещё не знакомы"
 	_status_label.text = "Решения принимает симуляция · текст: Groq или локальный шаблон"
+	_status_label.text += " · %s" % _relationship_signal(npc.person_id)
 	_clear_actions()
 	if identity.known:
 		_conversation_label.text = "%s смотрит на вас и ждёт, что вы скажете." % identity.name
@@ -435,6 +593,8 @@ func _perform_model_action(action: Dictionary) -> void:
 	}
 	_conversation_label.text = "%s\n\n%s думает…" % [result.player_line, identity.name]
 	_status_label.text = result.feedback
+	_show_effect_toast(result.get("effects", []))
+	_update_news_feed()
 	if groq_client.is_configured():
 		var system_prompt := SocialRendererScript.build_system_prompt()
 		var render_context: Dictionary = world.get_conversation_context(
@@ -483,6 +643,7 @@ func _show_dialogue_response(response: String, source: String) -> void:
 	var name: String = world.get_person_name(_dialogue_npc.person_id)
 	_conversation_label.text = "Вы: «%s»\n\n%s: «%s»" % [_pending_player_line, name, response]
 	_status_label.text = "Текст ответа: %s" % source
+	_status_label.text += " · %s" % _relationship_signal(_dialogue_npc.person_id)
 	_pending_act = {}
 	_pending_fallback = ""
 	_pending_player_line = ""
@@ -514,11 +675,11 @@ func _open_aurora_entrance() -> void:
 	_role_label.text = "Контроль доступа"
 	_clear_actions()
 	if result.ok:
-		_conversation_label.text = "Приглашение подтверждено. Цель достигнута: вы вошли на закрытое мероприятие."
+		_conversation_label.text = "Пропуск подтверждён. Цель достигнута: вы вошли на закрытое мероприятие."
 		_status_label.text = "Результат вычислен по факту владения пропуском."
 	else:
-		_conversation_label.text = "Доступ пока закрыт: модель мира не нашла у вас действующего приглашения."
-		_status_label.text = "Требование модели: owns_access_token(Aurora Invitation)"
+		_conversation_label.text = "Доступ пока закрыт: модель мира не нашла у вас действующего пропуска."
+		_status_label.text = "Требование модели: действующий Aurora access token"
 
 
 func _clear_actions() -> void:
@@ -555,7 +716,89 @@ func _update_hud() -> void:
 		_objective_label.text += "\nПоручение: найти %s · %s" % [
 			str(task.counterpart_name), str(task.topic),
 		]
+	_update_district_pulse()
+	_update_news_feed()
 	_refresh_debug_inspector()
+
+
+func _update_district_pulse() -> void:
+	if _pulse_overall_label == null:
+		return
+	var pulse: Dictionary = world.get_district_pulse_view(world.player_id)
+	_pulse_overall_label.text = str(pulse.overall)
+	var pulse_color := Color("8fd0a2")
+	if str(pulse.tone) == "WARNING":
+		pulse_color = Color("e2bc72")
+	elif str(pulse.tone) == "DANGER":
+		pulse_color = Color("e28484")
+	_pulse_overall_label.add_theme_color_override("font_color", pulse_color)
+	var signals: Array = pulse.get("signals", [])
+	_pulse_signals_label.text = "  ·  ".join(PackedStringArray(signals))
+
+
+func _update_news_feed() -> void:
+	if _news_feed_label == null:
+		return
+	var items: Array[Dictionary] = world.get_player_news_feed(world.player_id, 4)
+	var lines := PackedStringArray()
+	for item: Dictionary in items:
+		lines.append("[color=#e7be7a]• %s  %s[/color]" % [
+			_tick_label(int(item.tick)), str(item.title),
+		])
+		lines.append("  %s" % str(item.detail))
+	if lines.is_empty():
+		lines.append("Пока ничего заметного. Разговаривайте с людьми и исследуйте район.")
+	_news_feed_label.text = "\n".join(lines)
+
+
+func _tick_label(event_tick: int) -> String:
+	var total_minutes := event_tick * 5
+	var day := 1 + int(total_minutes / (24 * 60))
+	var minute_of_day := (10 * 60 + total_minutes) % (24 * 60)
+	return "Д%d %02d:%02d" % [day, int(minute_of_day / 60), minute_of_day % 60]
+
+
+func _relationship_signal(target_id: int) -> String:
+	var relationship: Dictionary = world.get_relationship_state(target_id, world.player_id)
+	if relationship.is_empty():
+		return "отношение ещё не сформировано"
+	var trust := float(relationship.trust)
+	var label := "настороженное отношение"
+	if trust >= 0.7:
+		label = "доверительное отношение"
+	elif trust >= 0.4:
+		label = "ровное отношение"
+	if float(relationship.obligation) >= 0.45:
+		label += ", чувствует обязательство"
+	return label
+
+
+func _show_effect_toast(effects: Array) -> void:
+	for effect: Dictionary in effects:
+		var message := ""
+		match str(effect.get("type", "")):
+			"RELATIONSHIP_IMPROVED": message = "Отношение стало теплее"
+			"TASK_CREATED": message = "Новое поручение: поговорить с %s" % str(effect.get("counterpart_name", "контактом"))
+			"TASK_COMPLETED": message = "Поручение выполнено — отношения изменились"
+			"INTRODUCTION_CREATED": message = "Открыт новый контакт: %s" % str(effect.get("person_name", "человек"))
+			"ACCESS_GRANTED": message = "Получен новый способ доступа в Aurora"
+			"IDENTITY_EXCHANGED": message = "Новый человек добавлен в социальную карту"
+		if not message.is_empty():
+			_toast_label.text = message
+			_toast_remaining = 3.2
+			_toast_panel.modulate = Color.WHITE
+			_toast_panel.visible = true
+			return
+
+
+func _update_toast(delta: float) -> void:
+	if _toast_panel == null or not _toast_panel.visible:
+		return
+	_toast_remaining -= delta
+	if _toast_remaining <= 0.0:
+		_toast_panel.visible = false
+		return
+	_toast_panel.modulate.a = clampf(_toast_remaining / 0.45, 0.0, 1.0)
 
 
 func _style_button(button: Button, primary: bool) -> void:

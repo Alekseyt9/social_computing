@@ -78,6 +78,10 @@ Implemented so far:
   and links;
 - a development inspector (`F3`) for personality, needs, relationships, decisions,
   events, metrics, renderer prompts, raw output, and validated final dialogue;
+- a qualitative District Pulse panel driven by MS4 fields, an observer-safe
+  district news feed, and consequence notifications for computed action effects;
+- up to 45 moving ambient residents rendered from the current adaptive
+  LightAgent working set, without creating physics-heavy NPC nodes for all 1,200;
 - a walking-skeleton interface and headless acceptance tests.
 
 Milestone 1 is implemented. Milestone 2 has started with a deterministic layer
@@ -89,13 +93,28 @@ persistent EventStore as observer-safe district opportunities: informed NPCs
 can disclose them through the model-driven `AskLocalNews` action. Aggregate/
 refinement LOD is now the active Milestone 3 workstream.
 
-The MS3 foundation adds reversible `Aggregate ↔ LightAgent ↔ PersistentNPC`
+The MS3 implementation adds reversible `Aggregate ↔ LightAgent ↔ PersistentNPC`
 tier membership over the same canonical residents. It starts with 1,140
 aggregated residents and 60 refined LightAgents, supports contact-neighborhood
 refinement and relevance-based persistent promotion, and checks exact
 conservation of population, employment, unemployment, money, and identity.
 Detailed agents run local updates every 12 ticks; aggregated cohorts use a
-lower-frequency 72/96-tick batch cadence.
+lower-frequency 72/96-tick batch cadence. The canonical lightweight records now
+use a packed struct-of-arrays store instead of 1,200 resident Dictionaries;
+individual views are reconstructed only at query/refinement boundaries.
+
+In the running 2D scene, the relevance policy refreshes every 12 simulation
+ticks. It selects residents scheduled at the player's current map zone, gives
+priority to explicitly relevant residents and contacts of adaptive persistent
+NPCs, keeps a fixed LightAgent budget, and uses hysteresis to prevent tier churn.
+
+Aggregate evolution now uses cohort indexes. Employment transitions select only
+the expected changed members of each employment/workplace/schedule cohort;
+aggregate gossip and money operators update deterministic cohort samples; and
+locations are derived from cohort schedules instead of being rewritten for every
+resident. A 10,000-resident, seven-day regression currently reduces local
+agent-update steps by about 96% relative to running every resident at detailed
+cadence while preserving exact tracked totals.
 
 ## Project Structure
 
@@ -209,6 +228,71 @@ godot_console --headless --path ./game --script res://tests/milestone3_adaptive_
 It exercises full and local refinement, coarsening, temporary promotion to
 PersistentNPC, ten days of evolution, differential update cadence, and exact
 conservation through every transition.
+
+Run the automatic relevance policy test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone3_relevance_test.gd
+```
+
+It checks place-based focus, remote social relevance, persistent retention,
+budget enforcement, hysteresis, and conservation.
+
+Run the 10,000-resident scale regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone3_scale_benchmark.gd
+```
+
+The benchmark rejects quadratic regressions, requires packed storage and exact
+conservation, and compares actual cohort/detailed updates with a naive all-agent
+baseline. Its 15-second ceiling is a CI guardrail rather than a shipping target.
+
+Run the player-facing UI/data-isolation test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/ui_simulation_integration_test.gd
+```
+
+It loads the full scene, verifies District Pulse, News Feed, consequence toast,
+and adaptive crowd nodes, enforces the 45-resident visual budget, promotes one
+ambient resident into a visible persistent NPC, and confirms that hidden
+relationships and undisclosed population rumors do not leak into UI.
+
+Ambient residents are interactive rather than decorative. Walking close to one
+shows the same `E` dialogue prompt used by story NPCs. Interaction promotes the
+canonical `LightAgent` into the persistent tier under the same stable ID,
+materializes a deterministic name, role, personality and needs, then routes all
+dialogue choices through the universal social-action model. The resident is
+removed from the lightweight crowd layer, so the population is never counted
+twice.
+
+Run the headless identity/conservation regression:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/adaptive_citizen_interaction_test.gd
+```
+
+### District Social Fields (MS4)
+
+The district now maintains normalized continuous fields for wealth, fear, crime,
+employment, trust, social tension, information exposure, stress, spending, and
+business health. Population summaries update the fields once per game day;
+fields feed back into cohort hiring/departure rates and persistent-NPC utility;
+accepted/refused social interactions contribute back to trust, tension, and fear.
+All field values are visible only in the `F3` developer inspector.
+
+Run the 30-day feedback-loop test:
+
+```powershell
+godot_console --headless --path ./game --script res://tests/milestone4_social_fields_test.gd
+```
+
+It compares equal-seed baseline and shocked districts and verifies the required
+causal direction: unemployment raises stress, lowers spending and business
+health, and feeds back into additional unemployment. It also checks normalized
+bounds, determinism, structured field events, NPC risk influence, and
+agent-to-field contributions.
 
 ## Groq API
 

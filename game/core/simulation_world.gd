@@ -16,6 +16,7 @@ const DecisionEngineScript := preload("res://social/decision_engine.gd")
 const GoalSolverScript := preload("res://social/goal_solver.gd")
 const LightPopulationSimulationScript := preload("res://agents/light_population_simulation.gd")
 const AdaptivePopulationSystemScript := preload("res://adaptive/adaptive_population_system.gd")
+const DistrictSocialFieldSystemScript := preload("res://social_fields/district_social_field_system.gd")
 const CommunicativeActScript := preload("res://rendering/communicative_act.gd")
 const TemplateRendererScript := preload("res://rendering/template_social_renderer.gd")
 
@@ -59,6 +60,19 @@ var _next_event_id: int = 1
 var _planner_meetable_ids: Array[int] = [2, 5, 8]
 var _light_population: RefCounted
 var _adaptive_population: RefCounted
+var _district_fields: RefCounted
+var _activated_adaptive_person_ids: Dictionary = {}
+
+const RESIDENT_FIRST_NAMES := [
+	"Алексей", "Анна", "Борис", "Вера", "Глеб", "Дарья", "Егор", "Жанна",
+	"Илья", "Кира", "Лев", "Марина", "Никита", "Ольга", "Павел", "Рита",
+	"Семён", "Таисия", "Фёдор", "Юлия",
+]
+const RESIDENT_LAST_NAMES := [
+	"Белов", "Волков", "Громов", "Денисов", "Ершов", "Захаров", "Исаев",
+	"Крылов", "Лебедев", "Морозов", "Новиков", "Орлов", "Поляков", "Романов",
+	"Соколов", "Титов", "Устинов", "Фролов", "Чернов", "Шестаков",
+]
 
 
 func _init(initial_seed: int) -> void:
@@ -69,6 +83,8 @@ func _init(initial_seed: int) -> void:
 	_adaptive_population = AdaptivePopulationSystemScript.new(
 		_light_population, get_npc_count(), 60
 	)
+	_district_fields = DistrictSocialFieldSystemScript.new(_light_population.snapshot())
+	_light_population.set_social_field_influence(_district_fields.snapshot())
 
 
 func advance(ticks: int) -> Dictionary:
@@ -78,6 +94,8 @@ func advance(ticks: int) -> Dictionary:
 		tick += 1
 		_light_population.advance(1)
 		_ingest_light_population_events()
+		if tick % 288 == 0:
+			_update_district_social_fields()
 		_update_task_deadlines()
 		if tick % 12 == 0:
 			_propagate_one_fact()
@@ -87,6 +105,7 @@ func advance(ticks: int) -> Dictionary:
 func snapshot() -> Dictionary:
 	var light_snapshot: Dictionary = _light_population.snapshot() if _light_population != null else {}
 	var adaptive_snapshot: Dictionary = _adaptive_population.snapshot() if _adaptive_population != null else {}
+	var field_snapshot: Dictionary = _district_fields.snapshot() if _district_fields != null else {}
 	return {
 		"seed": seed,
 		"tick": tick,
@@ -110,6 +129,7 @@ func snapshot() -> Dictionary:
 		"aggregate_population_count": int(adaptive_snapshot.get("aggregate_count", 0)),
 		"refined_light_agent_count": int(adaptive_snapshot.get("light_agent_count", 0)),
 		"adaptive_persistent_count": int(adaptive_snapshot.get("promoted_persistent_count", 0)),
+		"district_field_update_count": int(field_snapshot.get("update_count", 0)),
 	}
 
 
@@ -193,10 +213,70 @@ func refine_all_light_agents() -> Dictionary:
 	return _adaptive_population.refine_all()
 
 
+func update_adaptive_focus(
+	player_place_id: int,
+	socially_relevant_light_ids: Array = [],
+	light_budget: int = 60
+) -> Dictionary:
+	return _adaptive_population.update_relevance_focus(
+		player_place_id, socially_relevant_light_ids, light_budget
+	)
+
+
 func promote_light_agent_to_persistent(
 	agent_id: int, reason: String = "PLAYER_RELEVANCE"
 ) -> Dictionary:
 	return _adaptive_population.promote_to_persistent(agent_id, reason)
+
+
+func activate_light_agent_as_person(
+	agent_id: int, reason: String = "PLAYER_INTERACTION"
+) -> Dictionary:
+	## Materializes the social/interactive projection of a canonical population
+	## agent. Population state is not copied or removed, so conservation remains
+	## the responsibility of AdaptivePopulationSystem.
+	var agent: Dictionary = _light_population.get_agent_view(agent_id)
+	if agent.is_empty():
+		return {"ok": false, "error": "UNKNOWN_LIGHT_AGENT"}
+	var promotion: Dictionary = _adaptive_population.promote_to_persistent(agent_id, reason)
+	if not bool(promotion.get("ok", false)):
+		return promotion
+	var newly_activated := not _people.has(agent_id)
+	if newly_activated:
+		var person_name := _resident_name(agent_id)
+		var person_role := _resident_role(agent)
+		var traits := _resident_traits(agent_id)
+		_register_person(
+			agent_id,
+			person_name,
+			person_role,
+			int(agent.home_place_id),
+			int(agent.workplace_organization_id),
+			false,
+			traits
+		)
+		_activated_adaptive_person_ids[agent_id] = true
+		# A newly focused citizen retains the public district information that
+		# reached their population cohort. It only becomes visible to the player
+		# through the normal disclosure/action rules.
+		for fact_id: int in _district_opportunity_fact_ids:
+			_add_knowledge(agent_id, fact_id, 0.85, agent_id, 0.70)
+	return {
+		"ok": true,
+		"person_id": agent_id,
+		"name": get_person_name(agent_id),
+		"role": get_person_role(agent_id),
+		"newly_activated": newly_activated,
+		"adaptive_profile": promotion.get("profile", {}).duplicate(true),
+	}
+
+
+func get_activated_adaptive_person_ids() -> Array[int]:
+	var result: Array[int] = []
+	for person_id: int in _activated_adaptive_person_ids:
+		result.append(person_id)
+	result.sort()
+	return result
 
 
 func release_adaptive_persistent(
@@ -217,6 +297,20 @@ func validate_adaptive_population() -> Array[String]:
 	return _adaptive_population.validate()
 
 
+func get_district_social_fields() -> Dictionary:
+	return _district_fields.snapshot()
+
+
+func apply_district_field_shock(shock: Dictionary) -> Dictionary:
+	var result: Dictionary = _district_fields.apply_shock(shock)
+	_light_population.set_social_field_influence(result)
+	return result
+
+
+func validate_district_social_fields() -> Array[String]:
+	return _district_fields.validate()
+
+
 func get_district_opportunities(observer_id: int) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for fact_id: int in _district_opportunity_fact_ids:
@@ -230,6 +324,55 @@ func get_district_opportunities(observer_id: int) -> Array[Dictionary]:
 			"summary": str(payload.get("summary", "")),
 			"tick": fact.timestamp,
 		})
+	return result
+
+
+func get_district_pulse_view(_observer_id: int) -> Dictionary:
+	var fields: Dictionary = get_district_social_fields()
+	var pressure := maxf(
+		float(fields.social_tension),
+		maxf(float(fields.fear), maxf(float(fields.crime), float(fields.unemployment)))
+	)
+	var overall := "Спокойная обстановка"
+	var tone := "POSITIVE"
+	if pressure >= 0.68:
+		overall = "Район под сильным давлением"
+		tone = "DANGER"
+	elif pressure >= 0.42:
+		overall = "В районе ощущается напряжение"
+		tone = "WARNING"
+	var employment_label := _level_label(
+		float(fields.employment), "Работы мало", "Рынок труда нестабилен", "Работы достаточно"
+	)
+	var business_label := _level_label(
+		float(fields.business_health), "Бизнес слабеет", "Бизнес держится", "Бизнес оживлён"
+	)
+	var safety_value := 1.0 - maxf(float(fields.crime), float(fields.fear))
+	var safety_label := _level_label(
+		safety_value, "Люди избегают риска", "Есть опасения", "На улицах спокойно"
+	)
+	var social_value := 1.0 - float(fields.social_tension)
+	var social_label := _level_label(
+		social_value, "Сообщество расколото", "Мнения расходятся", "Сообщество сплочено"
+	)
+	return {
+		"overall": overall,
+		"tone": tone,
+		"signals": [employment_label, business_label, safety_label, social_label],
+		"updated_tick": int(fields.tick),
+	}
+
+
+func get_player_news_feed(observer_id: int, limit: int = 6) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for index in range(_events.size() - 1, -1, -1):
+		var event: RefCounted = _events[index]
+		var item := _player_news_item(observer_id, event)
+		if item.is_empty():
+			continue
+		result.append(item)
+		if result.size() >= maxi(0, limit):
+			break
 	return result
 
 
@@ -328,6 +471,7 @@ func get_metrics() -> Dictionary:
 			interactions += 1
 	var light_metrics: Dictionary = get_light_population_snapshot()
 	var adaptive_metrics: Dictionary = get_adaptive_population_snapshot()
+	var field_metrics: Dictionary = get_district_social_fields()
 	return {
 		"tick": tick,
 		"events": _events.size(),
@@ -339,6 +483,7 @@ func get_metrics() -> Dictionary:
 		"goal_reachable_strategies": int(get_goal_reachability_report().strategy_count),
 		"light_population": light_metrics,
 		"adaptive_population": adaptive_metrics,
+		"district_social_fields": field_metrics,
 	}
 
 
@@ -380,6 +525,63 @@ func _add_map_node(
 ) -> void:
 	if not nodes_by_key.has(key):
 		nodes_by_key[key] = {"id": key, "kind": kind, "label": label, "is_player": is_player}
+
+
+func _player_news_item(observer_id: int, event: RefCounted) -> Dictionary:
+	var involves_observer: bool = observer_id in event.actor_ids or observer_id in event.target_ids
+	match event.event_type:
+		"people_met":
+			if not involves_observer:
+				return {}
+			var other_ids: Array[int] = []
+			for person_id: int in event.actor_ids + event.target_ids:
+				if person_id != observer_id:
+					other_ids.append(person_id)
+			return _news_item(event.timestamp, "CONTACT", "Новый контакт", get_person_name(other_ids[0]) if not other_ids.is_empty() else "Знакомство состоялось")
+		"social_action_resolved":
+			if not involves_observer:
+				return {}
+			var counterpart_id := int(event.target_ids[0]) if not event.target_ids.is_empty() else -1
+			return _news_item(event.timestamp, "SOCIAL", "Разговор завершён", "Собеседник: %s" % get_person_name(counterpart_id))
+		"social_task_created":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "TASK", "Появилось поручение", "Оно может изменить отношения и открыть новый путь.")
+		"social_task_completed":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "TASK", "Поручение выполнено", "Результат учтён моделью отношений.")
+		"entered_private_event":
+			if not involves_observer:
+				return {}
+			return _news_item(event.timestamp, "GOAL", "Доступ в Aurora получен", "Вы вошли на закрытое мероприятие.")
+		"district_population_signal":
+			for fact_id: int in event.affected_fact_ids:
+				if person_knows_fact(observer_id, fact_id):
+					return _news_item(event.timestamp, "DISTRICT", "Новости района", _fact_summary_for_observer(fact_id, observer_id))
+			return {}
+		"district_fields_updated":
+			var pulse: Dictionary = get_district_pulse_view(observer_id)
+			return _news_item(event.timestamp, "PULSE", "Обстановка изменилась", str(pulse.overall))
+		"event_scheduled":
+			for fact_id: int in event.affected_fact_ids:
+				if person_knows_fact(observer_id, fact_id):
+					return _news_item(event.timestamp, "AURORA", "В Aurora готовится мероприятие", "Доступ ограничен — потребуется социальный путь.")
+			return {}
+		_:
+			return {}
+
+
+func _news_item(event_tick: int, category: String, title: String, detail: String) -> Dictionary:
+	return {"tick": event_tick, "category": category, "title": title, "detail": detail}
+
+
+func _level_label(value: float, low: String, medium: String, high: String) -> String:
+	if value < 0.34:
+		return low
+	if value < 0.67:
+		return medium
+	return high
 
 
 func _get_internal_planning_state() -> Dictionary:
@@ -781,6 +983,10 @@ func perform_social_action(
 	var relationship: RefCounted = _relationships[relationship_key]
 	var target_person: RefCounted = _people[target_id]
 	var evaluation_context := context.duplicate(true)
+	var district_fields: Dictionary = get_district_social_fields()
+	evaluation_context["district_fear"] = float(district_fields.fear)
+	evaluation_context["district_social_tension"] = float(district_fields.social_tension)
+	evaluation_context["district_employment"] = float(district_fields.employment)
 	if action_type == "AskIntroduction":
 		var introduction_subject_id := int(context.subject_person_id)
 		var subject_relationship: RefCounted = _relationships.get(
@@ -795,6 +1001,7 @@ func perform_social_action(
 		target_person,
 		evaluation_context
 	)
+	_district_fields.record_social_outcome(action_type, str(decision.decision))
 	_last_decision_by_person[target_id] = decision.duplicate(true)
 
 	var revealed_facts: Array[Dictionary] = []
@@ -1371,6 +1578,21 @@ func _add_person(
 		"curiosity": _next_unit_float(),
 		"risk_tolerance": _next_unit_float(),
 	}
+	_register_person(
+		person_id, person_name, person_role, home_place_id,
+		workplace_organization_id, is_player, traits
+	)
+
+
+func _register_person(
+	person_id: int,
+	person_name: String,
+	person_role: String,
+	home_place_id: int,
+	workplace_organization_id: int,
+	is_player: bool,
+	traits: Dictionary
+) -> void:
 	var person := PersonScript.new(
 		person_id, person_name, person_role, home_place_id,
 		workplace_organization_id, is_player, traits
@@ -1387,6 +1609,48 @@ func _add_person(
 		)
 		_workplace_fact_ids[person_id] = workplace_fact_id
 		_add_knowledge(person_id, workplace_fact_id, 1.0, person_id, 0.1)
+
+
+func _resident_name(agent_id: int) -> String:
+	var first_index := _stable_resident_value(agent_id, 17) % RESIDENT_FIRST_NAMES.size()
+	var last_index := _stable_resident_value(agent_id, 53) % RESIDENT_LAST_NAMES.size()
+	var last_name: String = RESIDENT_LAST_NAMES[last_index]
+	if first_index % 2 == 1:
+		last_name += "а"
+	return "%s %s" % [RESIDENT_FIRST_NAMES[first_index], last_name]
+
+
+func _resident_role(agent: Dictionary) -> String:
+	if str(agent.employment_status) != "EMPLOYED":
+		return "житель района · ищет работу"
+	match int(agent.workplace_organization_id):
+		1:
+			return "сотрудник Aurora"
+		2:
+			return "сотрудник Corner Cafe"
+		_:
+			return "житель района"
+
+
+func _resident_traits(agent_id: int) -> Dictionary:
+	var trait_names := [
+		"sociability", "empathy", "honesty", "conformity", "ambition",
+		"aggression", "impulsivity", "loyalty", "curiosity", "risk_tolerance",
+	]
+	var result: Dictionary = {}
+	for index in range(trait_names.size()):
+		result[trait_names[index]] = float(
+			_stable_resident_value(agent_id, 101 + index * 37)
+		) / float(_LCG_MASK)
+	return result
+
+
+func _stable_resident_value(agent_id: int, salt: int) -> int:
+	# This deliberately does not touch the world's simulation RNG: merely
+	# looking at a citizen cannot alter future social outcomes.
+	return (
+		agent_id * _LCG_MULTIPLIER + salt * 97_531 + seed * 65_537
+	) & _LCG_MASK
 
 
 func _add_place(place_id: int, place_name: String, place_kind: String) -> void:
@@ -1544,6 +1808,17 @@ func _ingest_light_population_events() -> void:
 			informed_people, 2, tick, 0.5, 0.25, 0.2, [fact_id] as Array[int]
 		))
 		_next_event_id += 1
+
+
+func _update_district_social_fields() -> void:
+	var fields: Dictionary = _district_fields.advance_day(_light_population.snapshot())
+	_light_population.set_social_field_influence(fields)
+	_events.append(SocialEventScript.new(
+		_next_event_id, "district_fields_updated", [] as Array[int],
+		[] as Array[int], 2, tick, 0.45, float(fields.social_tension), 0.0,
+		[] as Array[int]
+	))
+	_next_event_id += 1
 
 
 func _population_event_payload(population_event: Dictionary) -> Dictionary:

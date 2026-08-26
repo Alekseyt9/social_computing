@@ -62,7 +62,7 @@ func _run() -> void:
 func _discover_and_unlock_next_contact(
 	world: RefCounted, actor_id: int, target_id: int
 ) -> int:
-	for _attempt in range(10):
+	for _attempt in range(30):
 		var actions: Array[Dictionary] = world.get_available_social_actions(actor_id, target_id)
 		var introduction := _find_action(actions, "AskIntroduction")
 		if not introduction.is_empty():
@@ -91,7 +91,7 @@ func _discover_and_unlock_next_contact(
 
 
 func _obtain_access(world: RefCounted, actor_id: int, issuer_id: int) -> bool:
-	for _attempt in range(10):
+	for _attempt in range(30):
 		var actions: Array[Dictionary] = world.get_available_social_actions(actor_id, issuer_id)
 		var request := _find_action(actions, "RequestAccess")
 		if request.is_empty():
