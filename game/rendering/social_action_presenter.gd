@@ -42,6 +42,15 @@ static func button_label(action: Dictionary) -> String:
 			}.get(str(context.get("access_type", "")), "Запросить доступ")
 		"AskDistrictSupport":
 			return "Попросить: %s" % str(context.get("contribution_label", "поддержка района"))
+		"RequestItem":
+			return "Попросить: %s" % str(context.get("item_label", "предмет"))
+		"OfferItem":
+			return "Предложить: %s" % str(context.get("item_label", "предмет"))
+		"BuyItem":
+			return "Купить: %s · %s" % [
+				str(context.get("item_label", "предмет")),
+				_format_money(int(context.get("unit_price_cents", 0))),
+			]
 		"GatherInformation":
 			return "Узнать сведения для %s" % str(context.get("requester_name", "знакомого"))
 		"DeliverMessage":
@@ -93,6 +102,12 @@ static func player_line(action_type: String, context: Dictionary) -> String:
 				"Ты", "можешь", "поддержать", topic,
 				"и", "предоставить", str(context.get("contribution_label", "нужный ресурс")),
 			], "?")
+		"RequestItem":
+			return _join(["Можешь", "дать", "мне", str(context.get("item_label", "этот предмет"))], "?")
+		"OfferItem":
+			return _join(["Хочешь", "я", "отдам", "тебе", str(context.get("item_label", "этот предмет"))], "?")
+		"BuyItem":
+			return _join(["Я", "хочу", "купить", str(context.get("item_label", "этот предмет"))], ".")
 		"GatherInformation":
 			return _join(["Мне", "нужно", "уточнить", topic, "для", str(context.get("requester_name", "знакомого"))], ".")
 		"DeliverMessage":
@@ -128,3 +143,7 @@ static func _activity_button(activity: String) -> String:
 		"CRAFT": "Помочь с проектом в мастерской",
 		"HOME": "Поговорить о домашних делах",
 	}.get(activity, "Присоединиться к занятию")
+
+
+static func _format_money(cents: int) -> String:
+	return "%d.%02d ₽" % [int(cents / 100), posmod(cents, 100)]

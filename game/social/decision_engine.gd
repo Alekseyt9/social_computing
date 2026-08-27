@@ -163,6 +163,24 @@ static func _action_costs(action_type: String, context: Dictionary) -> Dictionar
 			defaults.personal_cost = 0.15
 			defaults.risk = 0.10
 			defaults.secrecy = 0.05
+		"RequestItem":
+			# The caller supplies canonical value/scarcity-derived cost. Trust and
+			# obligation still decide whether a gift is accepted.
+			defaults.expected_benefit = 0.12
+			defaults.personal_cost = 0.32
+			defaults.risk = 0.08
+			defaults.secrecy = 0.0
+		"OfferItem":
+			defaults.expected_benefit = 0.72
+			defaults.personal_cost = 0.01
+			defaults.risk = 0.01
+			defaults.secrecy = 0.0
+		"BuyItem":
+			# A valid sale has already passed stock and funds preconditions.
+			defaults.expected_benefit = 0.95
+			defaults.personal_cost = 0.01
+			defaults.risk = 0.01
+			defaults.secrecy = 0.0
 
 	# Persistent NPCs read district fields as ambient pressure. The field never
 	# decides an action by itself; it modifies the same explicit utility costs.

@@ -96,6 +96,12 @@ static func _effect_clause(effect: Dictionary) -> String:
 				str(effect.get("contribution_label", "ресурс")),
 				int(effect.get("progress", 0)), int(effect.get("required", 2)),
 			]
+		"ITEM_TRANSFERRED":
+			if str(effect.get("direction", "")) == "OFFERED":
+				return "Спасибо, %s мне пригодится." % str(effect.get("item_label", "этот предмет"))
+			return "Хорошо, держи: %s." % str(effect.get("item_label", "этот предмет"))
+		"ITEM_PURCHASED":
+			return "Сделка состоялась: %s передан покупателю." % str(effect.get("item_label", "предмет"))
 		"RELATIONSHIP_DAMAGED":
 			return "Этот запрос усилил напряжение между нами."
 		_:

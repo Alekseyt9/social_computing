@@ -21,6 +21,8 @@ const LazyHistorySystemScript := preload("res://history/lazy_history_system.gd")
 const CommunicativeActScript := preload("res://rendering/communicative_act.gd")
 const TemplateRendererScript := preload("res://rendering/template_social_renderer.gd")
 const ActivityPlanSystemScript := preload("res://activities/activity_plan_system.gd")
+const ItemCatalogScript := preload("res://resources/item_catalog.gd")
+const ResourceInventorySystemScript := preload("res://resources/resource_inventory_system.gd")
 
 const _LCG_MULTIPLIER := 1_103_515_245
 const _LCG_INCREMENT := 12_345
@@ -33,6 +35,7 @@ const ACTIVITY_ACTIONS := [
 	"InviteToActivity", "JoinActivity", "AssistActivity",
 	"ObserveActivity", "HinderActivity", "InterruptActivity",
 ]
+const ITEM_ACTIONS := ["RequestItem", "OfferItem", "BuyItem"]
 
 var seed: int
 var tick: int = 0
@@ -77,6 +80,7 @@ var _reputation_by_person: Dictionary = {}
 var _affiliations_by_person: Dictionary = {}
 var _activity_invitations: Array[Dictionary] = []
 var _activity_plans: RefCounted
+var _resources: RefCounted
 
 const RESIDENT_FIRST_NAMES := [
 	"Алексей", "Анна", "Борис", "Вера", "Глеб", "Дарья", "Егор", "Жанна",
@@ -94,6 +98,8 @@ func _init(initial_seed: int) -> void:
 	seed = initial_seed
 	_random_state = initial_seed & _LCG_MASK
 	_build_aurora_scenario()
+	_resources = ResourceInventorySystemScript.new(ItemCatalogScript.definitions())
+	_initialize_resource_accounts()
 	_current_place_by_person[player_id] = 2
 	_light_population = LightPopulationSimulationScript.new(initial_seed, 1200)
 	_adaptive_population = AdaptivePopulationSystemScript.new(
@@ -131,12 +137,14 @@ func snapshot() -> Dictionary:
 	var adaptive_snapshot: Dictionary = _adaptive_population.snapshot() if _adaptive_population != null else {}
 	var field_snapshot: Dictionary = _district_fields.snapshot() if _district_fields != null else {}
 	var activity_plan_snapshot: Dictionary = _activity_plans.snapshot() if _activity_plans != null else {}
+	var resource_snapshot: Dictionary = _resources.snapshot() if _resources != null else {}
 	return {
 		"seed": seed,
 		"tick": tick,
 		"checksum": "%08x" % (
 			_random_state ^ tick ^ _people.size() ^ (_facts.size() << 8)
 			^ (_events.size() << 16) ^ (get_knowledge_edge_count() << 20)
+			^ str(resource_snapshot.get("checksum", "")).hash()
 		),
 		"npc_count": get_npc_count(),
 		"place_count": _places.size(),
@@ -168,6 +176,12 @@ func snapshot() -> Dictionary:
 		"missed_activity_plan_count": int(
 			activity_plan_snapshot.get("status_counts", {}).get("MISSED", 0)
 		),
+		"resource_account_count": int(resource_snapshot.get("account_count", 0)),
+		"resource_money_cents": int(resource_snapshot.get("money_cents", 0)),
+		"resource_item_totals": resource_snapshot.get("item_totals", {}).duplicate(true),
+		"resource_money_conserved": bool(resource_snapshot.get("money_conserved", true)),
+		"resource_items_conserved": bool(resource_snapshot.get("items_conserved", true)),
+		"resource_checksum": str(resource_snapshot.get("checksum", "")),
 	}
 
 
@@ -303,7 +317,26 @@ func get_player_journal_view(observer_id: int) -> Dictionary:
 		"news": get_player_news_feed(observer_id, 8),
 		"reputation": float(_reputation_by_person.get(observer_id, 0.0)),
 		"affiliations": Array(_affiliations_by_person.get(observer_id, {}).keys()),
+		"inventory": get_inventory_view(observer_id, observer_id),
 	}
+
+
+func get_inventory_view(observer_id: int, owner_id: int) -> Dictionary:
+	if _resources == null or not _resources.has_account(owner_id):
+		return {"person_id": owner_id, "money_cents": 0, "items": []}
+	if observer_id == owner_id:
+		return _resources.get_inventory_view(owner_id)
+	if not is_person_known_to(observer_id, owner_id):
+		return {"person_id": owner_id, "money_cents": 0, "items": []}
+	# Another person's wallet and private possessions are not observer-safe.
+	# Only explicit public stock is exposed.
+	var result: Dictionary = _resources.get_inventory_view(owner_id, true)
+	result["money_cents"] = 0
+	return result
+
+
+func get_resource_snapshot() -> Dictionary:
+	return _resources.snapshot().duplicate(true)
 
 
 func get_goal_reachability_report() -> Dictionary:
@@ -451,6 +484,7 @@ func activate_light_agent_as_person(
 			false,
 			traits
 		)
+		_register_resource_account(agent_id, person_role)
 		_activated_adaptive_person_ids[agent_id] = true
 		# A newly focused citizen retains the public district information that
 		# reached their population cohort. It only becomes visible to the player
@@ -1129,6 +1163,9 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 			actions.append({"type": "HinderActivity", "context": activity_context.duplicate(true)})
 			actions.append({"type": "InterruptActivity", "context": activity_context.duplicate(true)})
 
+	for item_action: Dictionary in _get_item_actions(actor_id, target_id):
+		actions.append(item_action)
+
 	actions.append({"type": "BuildRapport", "context": {"topic": "повседневные дела"}})
 	if not _has_active_task_from(actor_id, target_id):
 		actions.append({"type": "OfferHelp", "context": {"topic": "текущие трудности"}})
@@ -1176,6 +1213,86 @@ func get_available_social_actions(actor_id: int, target_id: int) -> Array[Dictio
 			},
 		})
 	return actions
+
+
+func _get_item_actions(actor_id: int, target_id: int) -> Array[Dictionary]:
+	var actions: Array[Dictionary] = []
+	if _resources == null or not _resources.has_account(actor_id) or not _resources.has_account(target_id):
+		return actions
+	var target_inventory: Dictionary = _resources.get_inventory_view(target_id)
+	var request_added := false
+	var buy_added := false
+	for item: Dictionary in target_inventory.items:
+		if int(item.quantity) <= 0:
+			continue
+		var base_context := {
+			"item_id": str(item.id),
+			"item_label": str(item.label),
+			"quantity": 1,
+			"unit_price_cents": int(item.base_price_cents),
+			"topic": str(item.label),
+		}
+		if bool(item.for_sale) and not buy_added and (
+			_resources.get_balance(actor_id) >= int(item.base_price_cents)
+		):
+			var buy_context := base_context.duplicate(true)
+			buy_context["expected_benefit"] = 0.95
+			buy_context["personal_cost"] = 0.01
+			buy_context["risk"] = 0.01
+			actions.append({"type": "BuyItem", "context": buy_context})
+			buy_added = true
+		elif not request_added:
+			var request_context := base_context.duplicate(true)
+			var scarcity := 1.0 / float(maxi(1, int(item.quantity)))
+			request_context["expected_benefit"] = 0.12
+			request_context["personal_cost"] = clampf(
+				0.10 + float(item.base_price_cents) / 180_000.0 + scarcity * 0.12,
+				0.10, 0.78
+			)
+			request_context["risk"] = 0.08
+			actions.append({"type": "RequestItem", "context": request_context})
+			request_added = true
+
+	var actor_inventory: Dictionary = _resources.get_inventory_view(actor_id)
+	var preferred_item := _preferred_item_for_person(target_id)
+	var offered: Dictionary = {}
+	for item: Dictionary in actor_inventory.items:
+		if int(item.quantity) <= 0:
+			continue
+		if offered.is_empty() or str(item.id) == preferred_item:
+			offered = item
+		if str(item.id) == preferred_item:
+			break
+	if not offered.is_empty():
+		actions.append({
+			"type": "OfferItem",
+			"context": {
+				"item_id": str(offered.id),
+				"item_label": str(offered.label),
+				"quantity": 1,
+				"unit_price_cents": int(offered.base_price_cents),
+				"topic": str(offered.label),
+				"expected_benefit": 0.92 if str(offered.id) == preferred_item else 0.68,
+				"personal_cost": 0.01,
+				"risk": 0.01,
+			},
+		})
+	return actions
+
+
+func _preferred_item_for_person(person_id: int) -> String:
+	var activity: Dictionary = get_person_activity_view(person_id)
+	match str(activity.get("activity", "")):
+		"HEALTH": return "MEDICINE"
+		"CRAFT", "WORK", "ERRANDS": return "TOOL"
+		"STUDY", "JOB_SEARCH": return "NOTEBOOK"
+		"SOCIAL", "LEISURE", "HOME": return "FOOD"
+	var role := get_person_role(person_id).to_lower()
+	if "engineer" in role or "contractor" in role:
+		return "TOOL"
+	if "journalist" in role or "editor" in role or "designer" in role:
+		return "NOTEBOOK"
+	return "FOOD"
 
 
 func _activity_action_context(activity: Dictionary) -> Dictionary:
@@ -1327,7 +1444,9 @@ func perform_social_action(
 	if action_type not in [
 		"BuildRapport", "OfferHelp", "AskAbout", "AskLocalNews", "AskFavor",
 		"AskIntroduction", "AskInvitation", "RequestAccess", "AskDistrictSupport"
-	] and action_type not in TASK_OPERATORS and action_type not in ACTIVITY_ACTIONS:
+	] and action_type not in TASK_OPERATORS and action_type not in ACTIVITY_ACTIONS and (
+		action_type not in ITEM_ACTIONS
+	):
 		return {"ok": false, "error": "UNKNOWN_ACTION"}
 	if not _people.has(actor_id) or not _people.has(target_id):
 		return {"ok": false, "error": "UNKNOWN_PERSON"}
@@ -1399,6 +1518,10 @@ func perform_social_action(
 			return {"ok": false, "error": "TASK_PARTICIPANT_MISMATCH"}
 		if str(task.get("operator", "")) != action_type:
 			return {"ok": false, "error": "TASK_OPERATOR_MISMATCH"}
+	if action_type in ITEM_ACTIONS:
+		var item_error := _prepare_item_action_context(action_type, actor_id, target_id, context)
+		if not item_error.is_empty():
+			return {"ok": false, "error": item_error}
 
 	var relationship: RefCounted = _relationships[relationship_key]
 	var target_person: RefCounted = _people[target_id]
@@ -1524,6 +1647,55 @@ func perform_social_action(
 	}
 
 
+func _prepare_item_action_context(
+	action_type: String, actor_id: int, target_id: int, context: Dictionary
+) -> String:
+	if _resources == null or not _resources.has_account(actor_id) or not _resources.has_account(target_id):
+		return "RESOURCE_ACCOUNT_MISSING"
+	var item_id := str(context.get("item_id", ""))
+	var definition: Dictionary = _resources.get_definition(item_id)
+	if definition.is_empty():
+		return "UNKNOWN_ITEM"
+	var quantity := 1
+	var source_id := actor_id if action_type == "OfferItem" else target_id
+	var recipient_id := target_id if action_type == "OfferItem" else actor_id
+	if _resources.get_quantity(source_id, item_id) < quantity:
+		return "ITEM_UNAVAILABLE"
+	var payment_cents := 0
+	if action_type == "BuyItem":
+		if not _resources.is_for_sale(target_id, item_id):
+			return "ITEM_NOT_FOR_SALE"
+		payment_cents = int(definition.base_price_cents) * quantity
+		if _resources.get_balance(actor_id) < payment_cents:
+			return "INSUFFICIENT_FUNDS"
+	context["item_id"] = item_id
+	context["item_label"] = str(definition.label)
+	context["topic"] = str(definition.label)
+	context["quantity"] = quantity
+	context["unit_price_cents"] = int(definition.base_price_cents)
+	context["payment_cents"] = payment_cents
+	context["source_id"] = source_id
+	context["recipient_id"] = recipient_id
+	if action_type == "BuyItem":
+		context["expected_benefit"] = 0.95
+		context["personal_cost"] = 0.01
+		context["risk"] = 0.01
+	elif action_type == "OfferItem":
+		context["expected_benefit"] = clampf(float(context.get("expected_benefit", 0.72)), 0.0, 1.0)
+		context["personal_cost"] = 0.01
+		context["risk"] = 0.01
+	else:
+		var source_quantity: int = _resources.get_quantity(source_id, item_id)
+		context["expected_benefit"] = 0.12
+		context["personal_cost"] = clampf(
+			0.10 + float(definition.base_price_cents) / 180_000.0
+			+ 0.12 / float(maxi(1, source_quantity)),
+			0.10, 0.78
+		)
+		context["risk"] = 0.08
+	return ""
+
+
 func _apply_social_effects(
 	action_type: String,
 	actor_id: int,
@@ -1573,7 +1745,56 @@ func _apply_social_effects(
 
 	var target_to_actor: RefCounted = _relationships[_relationship_key(target_id, actor_id)]
 	var actor_to_target: RefCounted = _relationships[_relationship_key(actor_id, target_id)]
-	if action_type == "BuildRapport":
+	if action_type in ITEM_ACTIONS:
+		var transfer: Dictionary = _resources.transfer_item(
+			int(context.source_id), int(context.recipient_id), str(context.item_id),
+			int(context.quantity), int(context.payment_cents)
+		)
+		if bool(transfer.get("ok", false)):
+			if action_type == "BuyItem":
+				target_to_actor.trust = clampf(target_to_actor.trust + 0.018, 0.0, 1.0)
+				effects.append({
+					"type": "ITEM_PURCHASED",
+					"item_id": str(transfer.item_id),
+					"item_label": str(transfer.item_label),
+					"quantity": int(transfer.quantity),
+					"payment_cents": int(transfer.payment_cents),
+					"source_id": int(transfer.source_id),
+					"recipient_id": int(transfer.recipient_id),
+				})
+			elif action_type == "OfferItem":
+				target_to_actor.trust = clampf(target_to_actor.trust + 0.055, 0.0, 1.0)
+				target_to_actor.obligation = clampf(target_to_actor.obligation + 0.045, 0.0, 1.0)
+				effects.append({
+					"type": "ITEM_TRANSFERRED",
+					"direction": "OFFERED",
+					"item_id": str(transfer.item_id),
+					"item_label": str(transfer.item_label),
+					"quantity": int(transfer.quantity),
+					"source_id": int(transfer.source_id),
+					"recipient_id": int(transfer.recipient_id),
+				})
+			else:
+				actor_to_target.obligation = clampf(actor_to_target.obligation + 0.05, 0.0, 1.0)
+				target_to_actor.trust = clampf(target_to_actor.trust + 0.025, 0.0, 1.0)
+				effects.append({
+					"type": "ITEM_TRANSFERRED",
+					"direction": "REQUESTED",
+					"item_id": str(transfer.item_id),
+					"item_label": str(transfer.item_label),
+					"quantity": int(transfer.quantity),
+					"source_id": int(transfer.source_id),
+					"recipient_id": int(transfer.recipient_id),
+				})
+			_events.append(SocialEventScript.new(
+				_next_event_id, "resource_transferred",
+				[int(transfer.source_id)] as Array[int],
+				[int(transfer.recipient_id)] as Array[int],
+				int(_current_place_by_person.get(actor_id, 2)), tick,
+				0.34, 0.22, 0.02, [] as Array[int]
+			))
+			_next_event_id += 1
+	elif action_type == "BuildRapport":
 		var traits: Dictionary = _people[target_id].personality
 		var diminishing := 1.0 / (1.0 + float(previous_count) * 0.28)
 		var trust_gain := (
@@ -2254,6 +2475,41 @@ func _register_person(
 		_add_knowledge(person_id, workplace_fact_id, 1.0, person_id, 0.1)
 
 
+func _initialize_resource_accounts() -> void:
+	var person_ids: Array = _people.keys()
+	person_ids.sort()
+	for person_id_value: Variant in person_ids:
+		var person_id := int(person_id_value)
+		_register_resource_account(person_id, get_person_role(person_id))
+
+
+func _register_resource_account(person_id: int, person_role: String) -> void:
+	if _resources == null or _resources.has_account(person_id):
+		return
+	var items := {"FOOD": 0, "MEDICINE": 0, "TOOL": 0, "NOTEBOOK": 0}
+	var sale_item_ids: Array[String] = []
+	var role := person_role.to_lower()
+	for item_id: String in ItemCatalogScript.definitions():
+		var definition: Dictionary = ItemCatalogScript.definitions()[item_id]
+		for token: Variant in definition.provider_role_tokens:
+			if str(token).to_lower() in role:
+				items[item_id] = 6 + posmod(person_id, 4)
+				sale_item_ids.append(item_id)
+				break
+	if person_id == player_id:
+		items["FOOD"] = 1
+		items["NOTEBOOK"] = 1
+	else:
+		var preferred := _preferred_item_for_person(person_id)
+		if int(items.get(preferred, 0)) == 0:
+			items[preferred] = 1 + posmod(person_id + seed, 2)
+	var money_cents := (
+		250_000 if person_id == player_id
+		else 80_000 + posmod(person_id * 17_389 + seed * 31, 160_001)
+	)
+	_resources.register_account(person_id, money_cents, items, sale_item_ids)
+
+
 func _resident_name(agent_id: int) -> String:
 	var first_index := _stable_resident_value(agent_id, 17) % RESIDENT_FIRST_NAMES.size()
 	var last_index := _stable_resident_value(agent_id, 53) % RESIDENT_LAST_NAMES.size()
@@ -2794,6 +3050,9 @@ func export_save_data() -> Dictionary:
 			"activity_plan_count": int(state.activity_plan_count),
 			"completed_activity_plan_count": int(state.completed_activity_plan_count),
 			"missed_activity_plan_count": int(state.missed_activity_plan_count),
+			"resource_checksum": str(state.resource_checksum),
+			"resource_money_cents": int(state.resource_money_cents),
+			"resource_item_totals": state.resource_item_totals.duplicate(true),
 			"light_feedback_checksum": str(
 				get_light_population_snapshot().feedback.checksum
 			),
@@ -2848,6 +3107,12 @@ static func create_from_save_data(data: Dictionary) -> RefCounted:
 	) or (
 		expected.has("missed_activity_plan_count")
 		and int(expected.missed_activity_plan_count) != int(actual.missed_activity_plan_count)
+	) or (
+		expected.has("resource_checksum")
+		and str(expected.resource_checksum) != str(actual.resource_checksum)
+	) or (
+		expected.has("resource_money_cents")
+		and int(expected.resource_money_cents) != int(actual.resource_money_cents)
 	) or (
 		expected.has("light_feedback_checksum")
 		and str(expected.light_feedback_checksum) != str(

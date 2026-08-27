@@ -1690,7 +1690,9 @@ func _add_action_category_label(category: String) -> void:
 	label.add_theme_font_size_override("font_size", 10)
 	label.add_theme_color_override(
 		"font_color", Color("8fd0a2") if category == "СОВМЕСТНО" else (
-			Color("e38d82") if category == "КОНФЛИКТ" else Color("8fbfc7")
+			Color("e38d82") if category == "КОНФЛИКТ" else (
+				Color("e0b86d") if category == "РЕСУРСЫ" else Color("8fbfc7")
+			)
 		)
 	)
 	_action_row.add_child(label)
@@ -1752,6 +1754,14 @@ func _refresh_journal() -> void:
 	lines.append("Группы: %s" % (
 		", ".join(PackedStringArray(affiliations)) if not affiliations.is_empty() else "пока нет"
 	))
+	var inventory: Dictionary = journal.inventory
+	lines.append("\n[color=#efcd88][font_size=18]ИНВЕНТАРЬ И СРЕДСТВА[/font_size][/color]")
+	lines.append("Кошелёк: %s" % _format_money(int(inventory.money_cents)))
+	if inventory.items.is_empty():
+		lines.append("Предметов пока нет.")
+	else:
+		for item: Dictionary in inventory.items:
+			lines.append("• %s ×%d" % [str(item.label), int(item.quantity)])
 	lines.append("\n[color=#efcd88][font_size=18]ПОРУЧЕНИЯ[/font_size][/color]")
 	if journal.tasks.is_empty():
 		lines.append("Активных обещаний нет.")
@@ -1908,6 +1918,11 @@ func _show_effect_toast(effects: Array) -> void:
 			"ACTIVITY_OBSERVED": message = "Вы наблюдали за занятием"
 			"ACTIVITY_HINDERED": message = "Помеха повысила стресс и испортила отношения"
 			"ACTIVITY_INTERRUPTED": message = "NPC прервал занятие и освободил место"
+			"ITEM_TRANSFERRED": message = "%s перемещён в инвентарь" % str(effect.get("item_label", "Предмет"))
+			"ITEM_PURCHASED": message = "Покупка завершена: %s · %s" % [
+				str(effect.get("item_label", "предмет")),
+				_format_money(int(effect.get("payment_cents", 0))),
+			]
 		if not message.is_empty():
 			_toast_label.text = message
 			_toast_remaining = 3.2
@@ -1945,6 +1960,9 @@ func _style_action_button(button: Button, primary: bool, category: String) -> vo
 	elif category == "КОНФЛИКТ":
 		background = Color("633a39")
 		border = Color("c36e66")
+	elif category == "РЕСУРСЫ":
+		background = Color("5b4b2c")
+		border = Color("c9a65f")
 	button.add_theme_stylebox_override("normal", _panel_style(background, border, 8))
 	button.add_theme_stylebox_override("hover", _panel_style(background.lightened(0.12), border.lightened(0.15), 8))
 	button.add_theme_stylebox_override("pressed", _panel_style(background.darkened(0.12), border, 8))
@@ -1963,6 +1981,8 @@ func _style_conflict_button(button: Button) -> void:
 
 
 func _action_category(action_type: String) -> String:
+	if action_type in ["RequestItem", "OfferItem", "BuyItem"]:
+		return "РЕСУРСЫ"
 	if action_type in ["InviteToActivity", "JoinActivity", "AssistActivity"]:
 		return "СОВМЕСТНО"
 	if action_type in ["HinderActivity", "InterruptActivity"]:
@@ -1971,7 +1991,11 @@ func _action_category(action_type: String) -> String:
 
 
 func _action_category_order(action_type: String) -> int:
-	return {"СОВМЕСТНО": 0, "ОБЩЕНИЕ": 1, "КОНФЛИКТ": 2}[_action_category(action_type)]
+	return {"СОВМЕСТНО": 0, "РЕСУРСЫ": 1, "ОБЩЕНИЕ": 2, "КОНФЛИКТ": 3}[_action_category(action_type)]
+
+
+func _format_money(cents: int) -> String:
+	return "%d.%02d ₽" % [int(cents / 100), posmod(cents, 100)]
 
 
 func _panel_style(background: Color, border: Color, radius: int) -> StyleBoxFlat:
